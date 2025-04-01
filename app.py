@@ -96,6 +96,7 @@ class ImageProcessingApp:
             text="台座の合成",
             style="Gray.TButton",
             width=15,
+            command=self.combine_base,
             state="disabled"  # 初期状態を無効に
         )
         self.combine_btn.grid(row=0, column=1, padx=5)
@@ -309,6 +310,91 @@ class ImageProcessingApp:
                 self.zoom_factor = min(self.max_zoom, self.zoom_factor * 1.1)
 
         self.update_image_display(self.current_display_image)
+
+    def calculate_image_center_and_bottom(self, binary_image):
+        """画像の重心と最下点を計算"""
+        # 輪郭を検出
+        contours, _ = cv2.findContours(binary_image, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        if not contours:
+            return None, None
+        
+        # 最大の輪郭を使用
+        main_contour = max(contours, key=cv2.contourArea)
+        
+        # 重心を計算
+        M = cv2.moments(main_contour)
+        if M["m00"] == 0:
+            return None, None
+        
+        center_x = int(M["m10"] / M["m00"])
+        
+        # 最下点のy座標を求める
+        bottom_y = max(point[0][1] for point in main_contour)
+        
+        return center_x, bottom_y
+
+    def combine_base(self):
+        """台座の合成処理（輪郭線を保持）"""
+        print("Starting combine_base function")
+        
+        if self.current_image is None:
+            print("Error: 画像が読み込まれていません")
+            return
+        
+        try:
+            print(f"Current image shape: {self.current_image.shape}")
+            
+            # グレースケール変換と二値化
+            gray = cv2.cvtColor(self.current_image, cv2.COLOR_BGR2GRAY)
+            _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            
+            # オブジェクトが白になるように調整
+            if np.mean(binary) > 127:
+                binary = cv2.bitwise_not(binary)
+            
+            # 輪郭線の作成（create_outlineの処理を再利用）
+            gap = 20
+            thickness = 3
+            
+            kernel_gap = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * gap + 1, 2 * gap + 1))
+            dilate_gap = cv2.dilate(binary, kernel_gap, iterations=1)
+            
+            kernel_thick = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * (gap + thickness) + 1, 2 * (gap + thickness) + 1))
+            dilate_thick = cv2.dilate(binary, kernel_thick, iterations=1)
+            
+            ring = cv2.subtract(dilate_thick, dilate_gap)
+            
+            # 重心と最下点を計算
+            center_x, bottom_y = self.calculate_image_center_and_bottom(binary)
+            print(f"Calculated points - center_x: {center_x}, bottom_y: {bottom_y}")
+            
+            if center_x is None or bottom_y is None:
+                print("Error: 画像の特徴点を検出できませんでした")
+                return
+            
+            # 結果画像の作成（輪郭線と特徴点を両方表示）
+            result = self.current_image.copy()
+            
+            # 赤い輪郭線を描画
+            result[ring == 255] = (0, 0, 255)
+            
+            # 特徴点を描画（輪郭線の上に重ねて表示）
+            cv2.circle(result, (center_x, bottom_y), 10, (0, 255, 0), -1)  # 緑の点
+            cv2.circle(result, (center_x, bottom_y), 12, (255, 255, 255), 2)  # 白い縁取り
+            
+            # 結果を表示
+            result_rgb = cv2.cvtColor(result, cv2.COLOR_BGR2RGB)
+            result_pil = Image.fromarray(result_rgb)
+            self.update_image_display(result_pil)
+            
+            print(f"重心のX座標: {center_x}, 最下点のY座標: {bottom_y}")
+            print("Processing completed successfully")
+            
+        except Exception as e:
+            print(f"Error combining base: {e}")
+            import traceback
+            traceback.print_exc()
 
 def main():
     root = TkinterDnD.Tk()
