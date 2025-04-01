@@ -109,25 +109,82 @@ class ImageProcessingApp:
         )
         self.output_btn.grid(row=0, column=2, padx=5)
         
-        # 右側：処理結果エリア（より広く）
+        # 右側：処理結果エリア
         self.result_frame = ttk.LabelFrame(self.main_frame, text="処理結果", padding="20")
         self.result_frame.grid(row=0, column=1, padx=10, pady=5, sticky=(tk.W, tk.E, tk.N, tk.S))
-        self.result_frame.grid_columnconfigure(0, weight=3)  # 重みを3に増やして幅を広く
+        self.result_frame.grid_columnconfigure(0, weight=1)
         self.result_frame.grid_rowconfigure(0, weight=1)
         
+        # 画像表示用のラベル
         self.result_label = ttk.Label(
             self.result_frame,
             text="画像を処理するとここに表示されます",
             padding="100",
-            relief="groove"
+            relief="groove",
+            anchor="center",  # テキストを中央揃え
+            justify="center"  # 複数行テキストも中央揃え
         )
-        self.result_label.grid(row=0, column=0, padx=10, pady=10, sticky=(tk.W, tk.E, tk.N, tk.S))
+        self.result_label.grid(
+            row=0, 
+            column=0, 
+            sticky=(tk.W, tk.E, tk.N, tk.S),
+            padx=10,  # 左右の余白
+            pady=10   # 上下の余白
+        )
+
+        # ズーム関連の変数を追加
+        self.zoom_factor = 1.0
+        self.min_zoom = 0.1
+        self.max_zoom = 5.0
+        self.current_display_image = None
+
+        # マウスホイールイベントをバインド
+        self.result_label.bind('<MouseWheel>', self.on_mousewheel)       # Windows
+        self.result_label.bind('<Button-4>', self.on_mousewheel)         # Linux上スクロール
+        self.result_label.bind('<Button-5>', self.on_mousewheel)         # Linux下スクロール
 
         # ドラッグ&ドロップの実装
         self.drop_area.drop_target_register(DND_FILES)
         self.drop_area.dnd_bind('<<Drop>>', self.handle_drop)
         self.drop_area.dnd_bind('<<DragEnter>>', self.handle_drag_enter)
         self.drop_area.dnd_bind('<<DragLeave>>', self.handle_drag_leave)
+
+        # スタイル設定を追加
+        style = ttk.Style()
+        style.configure(
+            "TLabel",
+            anchor="center",  # ラベル内のコンテンツを中央に
+            justify="center"  # テキストを中央揃え
+        )
+
+    def resize_image_with_aspect_ratio(self, image, max_size):
+        """アスペクト比を保持しながら画像をリサイズ"""
+        width, height = image.size
+        ratio = min(max_size[0]/width, max_size[1]/height)
+        new_size = (int(width*ratio), int(height*ratio))
+        return image.resize(new_size, Image.Resampling.LANCZOS)
+
+    def update_image_display(self, image):
+        """画像表示の更新"""
+        if not image:
+            return
+
+        self.current_display_image = image
+        
+        # 画像のオリジナルサイズを保持
+        original_size = image.size
+        
+        # ズーム適用（オリジナルサイズに対して）
+        zoom_size = (int(original_size[0] * self.zoom_factor), 
+                    int(original_size[1] * self.zoom_factor))
+        zoomed_image = image.resize(zoom_size, Image.Resampling.LANCZOS)
+        
+        # PhotoImage形式に変換
+        photo = ImageTk.PhotoImage(zoomed_image)
+        
+        # 画像を表示
+        self.result_label.configure(image=photo, text="")
+        self.result_label.image = photo  # 参照を保持
 
     def handle_drop(self, event):
         file_path = event.data
@@ -145,21 +202,11 @@ class ImageProcessingApp:
                 self.current_image = cv2.cvtColor(image_array, cv2.COLOR_RGB2BGR)
             else:  # グレースケール画像の場合
                 self.current_image = image_array
-                
-            print(f"CV2 image shape: {self.current_image.shape if self.current_image is not None else None}")
             
-            # 画像のサイズを調整
-            display_size = (400, 400)
-            image.thumbnail(display_size, Image.Resampling.LANCZOS)
+            # 画像表示の更新
+            self.update_image_display(image)
             
-            # PhotoImage形式に変換
-            photo = ImageTk.PhotoImage(image)
-            
-            # 結果表示用ラベルを更新
-            self.result_label.configure(image=photo, text="")
-            self.result_label.image = photo  # 参照を保持
-            
-            # 処理ボタンを有効化
+            # ボタンを有効化
             self.object_detect_btn.configure(state="normal")
             self.combine_btn.configure(state="normal")
             self.output_btn.configure(state="normal")
@@ -236,19 +283,32 @@ class ImageProcessingApp:
             result_rgb = cv2.cvtColor(result, cv2.COLOR_BGR2RGB)
             result_pil = Image.fromarray(result_rgb)
             
-            # サイズ調整
-            display_size = (400, 400)
-            result_pil.thumbnail(display_size, Image.Resampling.LANCZOS)
-            
-            # 画面に表示
-            photo = ImageTk.PhotoImage(result_pil)
-            self.result_label.configure(image=photo, text="")
-            self.result_label.image = photo
+            # update_image_displayを使用して表示
+            self.update_image_display(result_pil)
 
             print("輪郭線の作成が完了しました")
             
         except Exception as e:
             print(f"Error processing image: {e}")
+
+    def on_mousewheel(self, event):
+        """マウスホイールでのズーム処理"""
+        if not self.current_display_image:
+            return
+
+        # Windowsの場合はevent.delta、Linuxの場合はevent.numを使用
+        if hasattr(event, 'delta'):
+            if event.delta < 0:  # 下スクロール（縮小）
+                self.zoom_factor = max(self.min_zoom, self.zoom_factor * 0.9)
+            else:  # 上スクロール（拡大）
+                self.zoom_factor = min(self.max_zoom, self.zoom_factor * 1.1)
+        else:
+            if event.num == 5:  # 下スクロール（縮小）
+                self.zoom_factor = max(self.min_zoom, self.zoom_factor * 0.9)
+            elif event.num == 4:  # 上スクロール（拡大）
+                self.zoom_factor = min(self.max_zoom, self.zoom_factor * 1.1)
+
+        self.update_image_display(self.current_display_image)
 
 def main():
     root = TkinterDnD.Tk()
