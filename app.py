@@ -360,7 +360,7 @@ class ImageProcessingApp:
         return approx
 
     def draw_outline(self, original_image, binary, contour):
-        """輪郭線の描画処理（改善版）"""
+        """輪郭線の描画処理（アクリルスタンド向けに最適化）"""
         result = original_image.copy()
         
         # マスクの作成
@@ -382,8 +382,11 @@ class ImageProcessingApp:
         # 輪郭線の抽出
         outline = cv2.subtract(outer_edge, inner_edge)
         
-        # 輪郭線を赤色で描画
-        result[outline == 255] = (0, 0, 255)
+        # 輪郭線を赤色で描画（アルファチャンネルを含む）
+        if result.shape[2] == 4:  # RGBA画像の場合
+            result[outline == 255] = (0, 0, 255, 255)  # BGRA形式で赤色（アルファ値255）
+        else:  # RGB画像の場合
+            result[outline == 255] = (0, 0, 255)  # BGR形式で赤色
         
         return result
 
@@ -414,111 +417,101 @@ class ImageProcessingApp:
         try:
             print("台座合成処理を開始")
             
-            # 画像の前処理と輪郭検出
+            # 画像の前処理
             processed_binary = self.preprocess_image(self.current_image)
+            
+            # キャラクターの輪郭線を描画
             contour = self.detect_contours(processed_binary)
             if contour is None:
                 print("Error: 輪郭を検出できませんでした")
                 return
-
+            
+            # 輪郭線付きの画像を作成
+            outlined_image = self.draw_outline(self.current_image, processed_binary, contour)
+            
             # 重心と最下点の計算
             center_x, bottom_y = self.calculate_image_center_and_bottom(processed_binary)
-            print(f"重心X: {center_x}, 最下点Y: {bottom_y}")
             
             # 選択された台座の読み込み
             size = self.base_var.get()
             base_img_path = self.base_parts[size]
-            print(f"選択された台座: {size}, パス: {base_img_path}")
-            
             base_img = cv2.imread(base_img_path, cv2.IMREAD_UNCHANGED)
             if base_img is None:
-                print(f"Error: 台座画像の読み込みに失敗: {base_img_path}")
                 return
-            print(f"台座画像サイズ: {base_img.shape}")
 
-            # 台座の結合位置を計算
-            connection_points = self.find_connection_points(contour, bottom_y)
-            if connection_points:
-                left_point, right_point = connection_points
-                print(f"結合ポイント - 左: {left_point}, 右: {right_point}")
-            
-            # 台座の配置と結合
+            # 輪郭線付きの画像と台座を合成
             result = self.merge_base_with_outline(
-                self.current_image,
+                outlined_image,  # 輪郭線付きの画像を使用
                 base_img,
-                connection_points,
                 center_x,
-                bottom_y
+                bottom_y,
+                contour  # 輪郭情報を渡す
             )
             
-            # 結果の表示
+            # 結果を表示
             result_rgb = cv2.cvtColor(result, cv2.COLOR_BGR2RGB)
             result_pil = Image.fromarray(result_rgb)
             self.update_image_display(result_pil)
-            
-            print("台座合成が完了しました")
             
         except Exception as e:
             print(f"Error: {e}")
             traceback.print_exc()
 
-    def find_connection_points(self, contour, bottom_y, margin=10):
-        """輪郭線と台座の結合ポイントを検出"""
-        # 最下点付近の輪郭点を探す
-        bottom_points = []
-        for point in contour:
-            if abs(point[0][1] - bottom_y) <= margin:
-                bottom_points.append(point[0])
+    def merge_base_with_outline(self, outlined_image, base_img, center_x, bottom_y, contour):
+        """台座と画像を結合（補完線付き）"""
+        # 元画像のサイズを取得
+        h, w = outlined_image.shape[:2]
         
-        if not bottom_points:
-            return None
+        # 元画像をRGBA形式に変換
+        if outlined_image.shape[2] == 3:
+            rgba_image = np.zeros((h, w, 4), dtype=np.uint8)
+            rgba_image[:,:,:3] = outlined_image
+            rgba_image[:,:,3] = 255
+            outlined_image = rgba_image
         
-        # 左右の結合ポイントを特定
-        left_point = min(bottom_points, key=lambda p: p[0])
-        right_point = max(bottom_points, key=lambda p: p[0])
-        
-        return left_point, right_point
-
-    def merge_base_with_outline(self, original_image, base_img, connection_points, center_x, bottom_y):
-        """台座と輪郭線を結合（改善版）"""
-        if connection_points is None:
-            print("結合ポイントが見つかりませんでした")
-            return original_image
-
-        left_point, right_point = connection_points
-        result = original_image.copy()
-        
-        # 台座画像のサイズ調整
-        base_width = right_point[0] - left_point[0] + 60  # 余裕を持たせる
-        base_height = base_img.shape[0]
-        aspect_ratio = base_img.shape[1] / base_img.shape[0]
-        new_width = int(base_height * aspect_ratio)
-        resized_base = cv2.resize(base_img, (new_width, base_height))
+        # 台座画像のサイズを取得
+        base_h, base_w = base_img.shape[:2]
         
         # 台座の配置位置を計算
-        top_left_x = center_x - new_width // 2
-        top_left_y = bottom_y - 10  # 少し上に配置
+        base_x = center_x - base_w // 2
+        base_y = bottom_y - 10
         
-        # キャンバスのサイズを調整
-        canvas_height = max(result.shape[0], top_left_y + base_height)
-        canvas_width = max(result.shape[1], top_left_x + new_width)
-        canvas = np.zeros((canvas_height, canvas_width, 3), dtype=np.uint8)
-        canvas[:result.shape[0], :result.shape[1]] = result
+        # 新しいキャンバスを作成（透明な背景）
+        new_h = max(h, base_y + base_h + 20)
+        new_w = max(w, base_x + base_w + 40)
+        canvas = np.zeros((new_h, new_w, 4), dtype=np.uint8)
         
-        # 台座の合成
-        for y in range(base_height):
-            for x in range(new_width):
-                ty = top_left_y + y
-                tx = top_left_x + x
-                if (0 <= ty < canvas_height and 0 <= tx < canvas_width and 
-                    resized_base[y, x, 3] > 0):  # アルファチャンネルをチェック
-                    if not np.array_equal(canvas[ty, tx], [0, 0, 255]):  # 輪郭線以外
-                        canvas[ty, tx] = resized_base[y, x, :3]
+        # 輪郭線付きの画像を配置
+        canvas[:h, :w] = outlined_image
         
-        # デバッグ表示
-        cv2.circle(canvas, (center_x, bottom_y), 5, (0, 255, 0), -1)  # 中心点
-        cv2.circle(canvas, tuple(left_point), 5, (255, 0, 0), -1)  # 左端
-        cv2.circle(canvas, tuple(right_point), 5, (0, 0, 255), -1)  # 右端
+        # 台座を配置
+        for y in range(base_h):
+            for x in range(base_w):
+                ty = base_y + y
+                tx = base_x + x
+                if (0 <= ty < new_h and 0 <= tx < new_w and 
+                    base_img[y, x, 3] > 0):
+                    canvas[ty, tx] = base_img[y, x]
+                    canvas[ty, tx, 3] = 255
+
+        # 輪郭の最下部の点を取得
+        bottom_points = []
+        for point in contour:
+            if abs(point[0][1] - bottom_y) <= 5:  # 最下点付近の点を収集
+                bottom_points.append(point[0])
+        
+        if bottom_points:
+            # 左右の点を取得
+            left_point = min(bottom_points, key=lambda p: p[0])
+            right_point = max(bottom_points, key=lambda p: p[0])
+            
+            # 台座の上端の点を計算
+            base_left = (base_x + base_w//4, base_y)
+            base_right = (base_x + base_w*3//4, base_y)
+            
+            # 補完線を描画（赤色）
+            cv2.line(canvas, tuple(left_point), base_left, (0, 0, 255, 255), 3)
+            cv2.line(canvas, tuple(right_point), base_right, (0, 0, 255, 255), 3)
         
         return canvas
 
@@ -582,6 +575,32 @@ class ImageProcessingApp:
         dialog.destroy()
         self.update_selected_base_label()  # ラベルを更新
         self.combine_base()  # 台座合成処理を実行
+
+    def find_bottom_points(self, image, bottom_y, margin=5):
+        """画像の最下部の左右の点を検出"""
+        if image.shape[2] == 4:
+            # アルファチャンネルを使用
+            mask = image[:, :, 3] > 0
+        else:
+            # グレースケールに変換して2値化
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            _, mask = cv2.threshold(gray, 250, 255, cv2.THRESH_BINARY_INV)
+        
+        # 最下部付近の点を探す
+        bottom_region = mask[bottom_y-margin:bottom_y+margin, :]
+        y_indices, x_indices = np.where(bottom_region > 0)
+        
+        if len(x_indices) == 0:
+            return None
+        
+        # 左右の点を取得
+        left_x = np.min(x_indices)
+        right_x = np.max(x_indices)
+        
+        # 実際のy座標を計算（少し上に）
+        actual_y = bottom_y - margin + y_indices[0]
+        
+        return (left_x, actual_y), (right_x, actual_y)
 
 def create_base_image(width, height, base_width):
     """台座画像の作成（実用的なバージョン）"""
