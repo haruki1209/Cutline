@@ -79,7 +79,7 @@ class ImageProcessingApp:
                        background='#808080')
         
         # 画像処理用の変数
-        self.current_image = None  # 現在の画像（OpenCV形式）
+        self.current_image = None  
         
         # 各種ボタン
         self.object_detect_btn = ttk.Button(
@@ -121,7 +121,7 @@ class ImageProcessingApp:
         self.selected_base_label.grid(row=1, column=0, columnspan=3, pady=(5, 0))
 
         # 台座選択用の変数
-        self.base_var = tk.StringVar(value="16mm")  # デフォルト値を16mmに変更
+        self.base_var = tk.StringVar(value="16mm")  
         self.base_var.trace('w', self.update_selected_base_label)
 
         # 台座パーツの定義
@@ -162,9 +162,9 @@ class ImageProcessingApp:
         self.current_display_image = None
 
         # マウスホイールイベントをバインド
-        self.result_label.bind('<MouseWheel>', self.on_mousewheel)       # Windows
-        self.result_label.bind('<Button-4>', self.on_mousewheel)         # Linux(上スクロール)
-        self.result_label.bind('<Button-5>', self.on_mousewheel)         # Linux(下スクロール)
+        self.result_label.bind('<MouseWheel>', self.on_mousewheel)      
+        self.result_label.bind('<Button-4>', self.on_mousewheel)         
+        self.result_label.bind('<Button-5>', self.on_mousewheel)       
 
         # ドラッグ&ドロップの実装
         self.drop_area.drop_target_register(DND_FILES)
@@ -312,11 +312,11 @@ class ImageProcessingApp:
         if image.shape[2] == 4:
             # アルファチャンネルがある場合
             alpha = image[:, :, 3]
-            _, binary = cv2.threshold(alpha, 240, 255, cv2.THRESH_BINARY)  # しきい値を上げる
+            _, binary = cv2.threshold(alpha, 240, 255, cv2.THRESH_BINARY) 
         else:
             # RGBの場合
             gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-            _, binary = cv2.threshold(gray, 250, 255, cv2.THRESH_BINARY_INV)  # しきい値を上げる
+            _, binary = cv2.threshold(gray, 250, 255, cv2.THRESH_BINARY_INV)  
 
         # ノイズ除去を強化
         kernel = np.ones((3,3), np.uint8)
@@ -497,7 +497,7 @@ class ImageProcessingApp:
         # 輪郭の最下部の点を取得
         bottom_points = []
         for point in contour:
-            if abs(point[0][1] - bottom_y) <= 5:  # 最下点付近の点を収集
+            if point[0][1] >= bottom_y - 5 and point[0][1] <= bottom_y + 5:  # 最下点付近の点を収集
                 bottom_points.append(point[0])
         
         if bottom_points:
