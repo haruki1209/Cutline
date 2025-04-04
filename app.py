@@ -97,7 +97,7 @@ class ImageProcessingApp:
             text="台座の合成",
             style="Gray.TButton",
             width=15,
-            command=self.show_base_dialog,
+            command=self.toggle_base_options,  # ダイアログを使わずにトグル表示を行う
             state="disabled"
         )
         self.combine_btn.grid(row=0, column=1, padx=5)
@@ -131,6 +131,34 @@ class ImageProcessingApp:
             "12mm": "nichidai_base_12mm.png",
             "10mm": "nichidai_base_10mm.png"
         }
+
+        # ▼▼▼ ここから修正：台座選択のトグル表示用フレーム（中央寄せ） ▼▼▼
+        self.base_options_frame = ttk.Frame(self.operation_frame)
+        
+        # さらにサブフレームを作り、そこにCheckbutton類を配置することで中央寄せを実現
+        self.base_options_inner_frame = ttk.Frame(self.base_options_frame)
+        self.base_options_inner_frame.pack(expand=True)
+
+        # 台座選択用のトグルボタンを作成（中央寄せ）
+        for size in ["16mm", "14mm", "12mm", "10mm"]:
+            button = ttk.Checkbutton(
+                self.base_options_inner_frame,
+                text=f"台座 {size}",
+                variable=self.base_var,
+                onvalue=size,
+                offvalue="",
+                command=self.update_selected_base_label
+            )
+            button.pack(anchor="center", pady=5)
+
+        # 「合成実行」ボタン（台座合成の実行）も中央寄せ
+        self.apply_base_btn = ttk.Button(
+            self.base_options_inner_frame,
+            text="合成実行",
+            command=self.combine_base
+        )
+        self.apply_base_btn.pack(anchor="center", pady=5)
+        # ▲▲▲ 修正部分ここまで ▲▲▲
 
         # 右側：処理結果エリア
         self.result_frame = ttk.LabelFrame(self.main_frame, text="処理結果", padding="20")
@@ -174,6 +202,21 @@ class ImageProcessingApp:
 
         # スタイル設定
         style.configure("TLabel", anchor="center", justify="center")
+
+    # ------------------------------------------------
+    # 追加: 台座オプション表示の切り替え
+    # ------------------------------------------------
+    def toggle_base_options(self):
+        """
+        台座の合成ボタンを押した際に、トグル式で台座選択部分を表示・非表示を切り替える。
+        """
+        # もしフレームが既に画面上に表示されていれば非表示に、なければ表示する
+        if self.base_options_frame.winfo_manager():
+            # 表示されている場合 -> 非表示にする
+            self.base_options_frame.grid_remove()
+        else:
+            # 非表示の場合 -> operation_frame の下部に表示する
+            self.base_options_frame.grid(row=2, column=0, columnspan=3, pady=(10, 0), sticky=(tk.W, tk.E))
 
     # ------------------------------------------------
     # 画像表示関連
@@ -432,6 +475,9 @@ class ImageProcessingApp:
             # 重心と最下点の計算
             center_x, bottom_y = self.calculate_image_center_and_bottom(processed_binary)
             
+            # 台座の位置をログに出力
+            print(f"台座の配置位置: center_x={center_x}, bottom_y={bottom_y}")
+            
             # 選択された台座の読み込み
             size = self.base_var.get()
             base_img_path = self.base_parts[size]
@@ -497,7 +543,7 @@ class ImageProcessingApp:
         # 輪郭の最下部の点を取得
         bottom_points = []
         for point in contour:
-            if point[0][1] >= bottom_y - 5 and point[0][1] <= bottom_y + 5:  # 最下点付近の点を収集
+            if point[0][1] >= bottom_y - 10 and point[0][1] <= bottom_y + 10:  # 最下点付近の点を収集
                 bottom_points.append(point[0])
         
         if bottom_points:
@@ -506,8 +552,11 @@ class ImageProcessingApp:
             right_point = max(bottom_points, key=lambda p: p[0])
             
             # 台座の上端の点を計算
-            base_left = (base_x + base_w//4, base_y)
-            base_right = (base_x + base_w*3//4, base_y)
+            base_left = (base_x + base_w // 4, base_y)
+            base_right = (base_x + base_w * 3 // 4, base_y)
+
+            # 4点のポリゴンを定義
+            polygon_pts = np.array([left_point, base_left, base_right, right_point], dtype=np.int32)
             
             # 補完線を描画（赤色）
             cv2.line(canvas, tuple(left_point), base_left, (0, 0, 255, 255), 3)
@@ -522,59 +571,6 @@ class ImageProcessingApp:
             self.selected_base_label.configure(text=f"選択中の台座: {selected}")
         else:
             self.selected_base_label.configure(text="")
-
-    def show_base_dialog(self):
-        """台座選択ダイアログを表示"""
-        dialog = tk.Toplevel(self.root)
-        dialog.title("台座選択")
-        dialog.geometry("300x250")  # サイズ調整
-        dialog.transient(self.root)
-        dialog.grab_set()
-        
-        # ダイアログの中央配置
-        dialog.geometry("+%d+%d" % (
-            self.root.winfo_rootx() + self.root.winfo_width()//2 - 150,
-            self.root.winfo_rooty() + self.root.winfo_height()//2 - 125
-        ))
-
-        # 台座オプションフレーム
-        option_frame = ttk.LabelFrame(dialog, text="ニチダイ台座サイズ", padding="10")
-        option_frame.pack(fill="both", expand=True, padx=10, pady=5)
-
-        # サイズ選択のラジオボタン
-        for size in ["16mm", "14mm", "12mm", "10mm"]:
-            ttk.Radiobutton(
-                option_frame,
-                text=f"台座 {size}",
-                variable=self.base_var,
-                value=size
-            ).pack(anchor="w", pady=5)
-
-        # ボタンフレーム
-        button_frame = ttk.Frame(dialog)
-        button_frame.pack(fill="x", padx=10, pady=5)
-
-        # OKボタン
-        ok_btn = ttk.Button(
-            button_frame,
-            text="OK",
-            command=lambda: self.apply_base_selection(dialog)
-        )
-        ok_btn.pack(side="right", padx=5)
-
-        # キャンセルボタン
-        cancel_btn = ttk.Button(
-            button_frame,
-            text="キャンセル",
-            command=dialog.destroy
-        )
-        cancel_btn.pack(side="right", padx=5)
-
-    def apply_base_selection(self, dialog):
-        """選択された台座を適用"""
-        dialog.destroy()
-        self.update_selected_base_label()  # ラベルを更新
-        self.combine_base()  # 台座合成処理を実行
 
     def find_bottom_points(self, image, bottom_y, margin=5):
         """画像の最下部の左右の点を検出"""
@@ -623,10 +619,10 @@ def create_base_image(width, height, base_width):
     
     # 台座の下部（台形）
     pts = np.array([
-        [canvas_width//2 - top_width//2, top_height],  # 左上
+        [canvas_width//2 - top_width//2, top_height],    # 左上
         [canvas_width//2 - bottom_width//2, canvas_height-1],  # 左下
         [canvas_width//2 + bottom_width//2, canvas_height-1],  # 右下
-        [canvas_width//2 + top_width//2, top_height]  # 右上
+        [canvas_width//2 + top_width//2, top_height]     # 右上
     ], np.int32)
     
     cv2.fillPoly(image, [pts], (128, 128, 128, 255))
