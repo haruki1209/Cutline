@@ -132,7 +132,7 @@ def add_red_outline(bgr_image, binary_mask):
             y = int(p1[1] + (p2[1] - p1[1]) * t / 8)
             smooth_contour.append([[x, y]])
     smooth_contour = np.array(smooth_contour)
-    epsilon = 0.0008 * cv2.arcLength(smooth_contour, True)
+    epsilon = 0.0004 * cv2.arcLength(smooth_contour, True)
     approx = cv2.approxPolyDP(smooth_contour, epsilon, True)
 
     # アウトライン（赤）
