@@ -22,6 +22,10 @@ class ImageProcessingApp:
         self.min_zoom = 0.1
         self.max_zoom = 5.0
 
+        # モルフォロジーのパラメータ（必要に応じて調整）
+        self.gap = 20
+        self.thickness = 3
+
         # メインフレームの設定
         self.main_frame = ttk.Frame(self.root, padding="20")
         self.main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
@@ -265,19 +269,28 @@ class ImageProcessingApp:
                 self.zoom_factor = min(self.max_zoom, self.zoom_factor * 1.1)
         self.update_image_display(self.current_display_image)
 
-    # 輪郭線作成処理（先の実装）
+    # 二値化処理を統一する関数
+    def get_binary_mask(self, image_cv):
+        # 画像はBGR形式
+        gray = cv2.cvtColor(image_cv, cv2.COLOR_BGR2GRAY)
+        ret, mask = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        # もし背景が明るいなら反転（キャラクターを白にする）
+        if np.mean(mask) > 127:
+            mask = cv2.bitwise_not(mask)
+        print(f"Otsu threshold: {ret}, mask mean: {np.mean(mask)}")
+        return mask
+
+    # 輪郭線作成処理（統一した二値化処理を利用）
     def create_outline(self):
         print("輪郭線作成開始...")
         try:
-            # PIL画像をOpenCV用にBGR配列に変換
             image_cv = cv2.cvtColor(np.array(self.current_image), cv2.COLOR_RGB2BGR)
-            gray = cv2.cvtColor(image_cv, cv2.COLOR_BGR2GRAY)
-            _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-            if np.mean(binary) > 127:
-                binary = cv2.bitwise_not(binary)
+            binary = self.get_binary_mask(image_cv)
+            # デバッグ用：出力する二値化画像（オプション）
+            # cv2.imshow("Binary Mask", binary); cv2.waitKey(0); cv2.destroyAllWindows()
             
-            gap = 20
-            thickness = 3
+            gap = self.gap
+            thickness = self.thickness
             kernel_gap = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2*gap+1, 2*gap+1))
             dilate_gap = cv2.dilate(binary, kernel_gap, iterations=1)
             kernel_thick = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2*(gap+thickness)+1, 2*(gap+thickness)+1))
@@ -294,32 +307,32 @@ class ImageProcessingApp:
             print(f"Error in create_outline: {e}")
             traceback.print_exc()
 
-    # 補完線作成処理（具体的対策に基づく実装）
+    # 補完線作成処理（同一の二値化処理を使用）
     def create_complement_line(self):
         print("補完線作成開始...")
         try:
-            # 補完線処理対象は、輪郭線作成結果があればそちら、なければ元画像
             source_image = self.outlined_image if self.outlined_image is not None else self.current_image
             if source_image is None:
                 print("画像が読み込まれていません。")
                 return
             img = np.array(source_image.convert("RGB"))
-            gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
-            _, mask = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY)
+            # 二値化は統一処理を呼び出すため、まずBGRに変換
+            img_bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+            mask = self.get_binary_mask(img_bgr)
             contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             if len(contours) == 0:
                 print("輪郭が検出されませんでした。")
                 return
             main_contour = max(contours, key=cv2.contourArea)
-            # 下端のY座標は輪郭上の最大値
+            # 下端のY座標：main_contour中の最大 y
             bottom_y = max(pt[0][1] for pt in main_contour)
-            # 下端付近（bottom_y-5以上）の点から左右のx座標を抽出
             lower_points = [pt[0] for pt in main_contour if pt[0][1] >= bottom_y - 5]
             if not lower_points:
                 lower_points = [pt[0] for pt in main_contour]
             x_vals = [pt[0] for pt in lower_points]
             left_x = min(x_vals)
             right_x = max(x_vals)
+            print(f"[補完線] 下端 y = {bottom_y}, 左 x = {left_x}, 右 x = {right_x}")
             line_thickness = 2
             color = (0, 255, 0)  # 緑
             img_with_line = img.copy()
@@ -332,25 +345,22 @@ class ImageProcessingApp:
             print("Error in create_complement_line:", e)
             traceback.print_exc()
 
-    # 輪郭デバッグ処理：主要輪郭を描画し、下端・左右端を確認する
+    # 輪郭デバッグ処理：統一された二値化処理で得られた輪郭を描画、下端・左右端を表示する
     def debug_show_contours(self):
         print("輪郭デバッグ開始...")
         try:
-            # 対象画像は輪郭線作成結果があればそれ、なければ元画像
             source_image = self.outlined_image if self.outlined_image is not None else self.current_image
             if source_image is None:
                 print("画像が読み込まれていません。")
                 return
             img = np.array(source_image.convert("RGB"))
-            # 二値化処理
-            gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
-            _, binary = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY)
+            img_bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+            binary = self.get_binary_mask(img_bgr)
             contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             if len(contours) == 0:
                 print("輪郭が検出されませんでした。")
                 return
             main_contour = max(contours, key=cv2.contourArea)
-            # 輪郭の極値を計算
             bottom_y = max(pt[0][1] for pt in main_contour)
             lower_points = [pt[0] for pt in main_contour if pt[0][1] >= bottom_y - 5]
             if not lower_points:
@@ -358,15 +368,12 @@ class ImageProcessingApp:
             x_vals = [pt[0] for pt in lower_points]
             left_x = min(x_vals)
             right_x = max(x_vals)
-            print(f"輪郭デバッグ情報: 下端 y = {bottom_y}, 左 x = {left_x}, 右 x = {right_x}")
-
-            # 輪郭描画（オーバーレイ）
+            print(f"[輪郭デバッグ] 下端 y = {bottom_y}, 左 x = {left_x}, 右 x = {right_x}")
             debug_img = img.copy()
-            cv2.drawContours(debug_img, [main_contour], -1, (255, 0, 0), 2)  # 輪郭を青色で描画
-            # 下端の点に赤い丸印
+            cv2.drawContours(debug_img, [main_contour], -1, (255, 0, 0), 2)  # 青色で輪郭描画
             cv2.circle(debug_img, (left_x, bottom_y), 5, (0, 0, 255), -1)
             cv2.circle(debug_img, (right_x, bottom_y), 5, (0, 0, 255), -1)
-            cv2.circle(debug_img, (int((left_x+right_x)/2), bottom_y), 5, (0, 255, 255), -1)  # 中央に黄色丸印
+            cv2.circle(debug_img, (int((left_x + right_x)/2), bottom_y), 5, (0, 255, 255), -1)
             result_pil = Image.fromarray(debug_img)
             self.update_image_display(result_pil)
             print("輪郭デバッグが完了しました。")
