@@ -16,7 +16,6 @@ class ImageProcessingApp:
         # 画像保持用
         self.current_image = None
         self.outlined_image = None
-        self.complement_image = None  # 補完線作成結果保存用
         self.current_display_image = None
         self.zoom_factor = 1.0
         self.min_zoom = 0.1
@@ -26,8 +25,7 @@ class ImageProcessingApp:
         self.gap = 20
         self.thickness = 3
 
-        # 台座関連の設定（既存台座画像がある前提）
-        # ラジオボタンにより1つのオプションが選択される形式とする
+        # 台座関連の設定
         self.base_var = tk.StringVar(value="16mm")
         self.base_parts = {
             "16mm": "nichidai_base_16mm.png",
@@ -35,7 +33,6 @@ class ImageProcessingApp:
             "12mm": "nichidai_base_12mm.png",
             "10mm": "nichidai_base_10mm.png"
         }
-        # 台座画像のリサイズサイズ（幅×高さ）
         self.base_sizes = {
             "16mm": (200, 40),
             "14mm": (175, 35),
@@ -43,7 +40,7 @@ class ImageProcessingApp:
             "10mm": (125, 25)
         }
 
-        # ---------- GUI の設定 ----------
+        # GUI レイアウト
         self.main_frame = ttk.Frame(self.root, padding="20")
         self.main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         self.root.grid_columnconfigure(0, weight=1)
@@ -52,14 +49,14 @@ class ImageProcessingApp:
         self.main_frame.grid_columnconfigure(1, weight=1)
         self.main_frame.grid_rowconfigure(0, weight=1)
 
-        # 左側フレーム
+        # 左側：アップロード＆操作
         self.left_frame = ttk.Frame(self.main_frame)
-        self.left_frame.grid(row=0, column=0, padx=10, pady=5, sticky=(tk.W, tk.E, tk.N, tk.S))
+        self.left_frame.grid(row=0, column=0, padx=10, pady=5, sticky="nsew")
         self.left_frame.grid_columnconfigure(0, weight=1)
 
-        # 画像アップロードフレーム
+        # 画像アップロード
         self.upload_frame = ttk.LabelFrame(self.left_frame, text="画像アップロード", padding="20")
-        self.upload_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        self.upload_frame.grid(row=0, column=0, sticky="nsew")
         self.upload_frame.grid_columnconfigure(0, weight=1)
         self.upload_frame.grid_rowconfigure(0, weight=1)
 
@@ -75,7 +72,7 @@ class ImageProcessingApp:
             relief="solid",
             style="Drop.TLabel"
         )
-        self.drop_area.grid(row=0, column=0, padx=(20,20), pady=(20,5), sticky=(tk.W, tk.E, tk.N, tk.S))
+        self.drop_area.grid(row=0, column=0, padx=20, pady=(20,5), sticky="nsew")
 
         self.select_btn = ttk.Button(
             self.upload_frame,
@@ -87,8 +84,7 @@ class ImageProcessingApp:
 
         # 操作フレーム
         self.operation_frame = ttk.LabelFrame(self.left_frame, text="操作", padding="20")
-        self.operation_frame.grid(row=1, column=0, pady=(10,0), sticky=(tk.W, tk.E))
-        # 3列配置：輪郭線作成、台座合成、画像出力
+        self.operation_frame.grid(row=1, column=0, pady=(10,0), sticky="ew")
         for i in range(3):
             self.operation_frame.grid_columnconfigure(i, weight=1)
 
@@ -102,8 +98,6 @@ class ImageProcessingApp:
         )
         self.outline_btn.grid(row=0, column=0, padx=5)
 
-        # ここでは輪郭デバッグボタンは削除
-        # 台座合成ボタン（これを押すと台座選択ラジオボタンと合成実行ボタンが下に現れる）
         self.combine_btn = ttk.Button(
             self.operation_frame,
             text="台座合成",
@@ -129,11 +123,10 @@ class ImageProcessingApp:
             font=("Helvetica", 9),
             foreground='#666666'
         )
-        self.selected_base_label.grid(row=1, column=0, columnspan=3, pady=(5, 0))
+        self.selected_base_label.grid(row=1, column=0, columnspan=3, pady=(5,0))
 
-        # ▼ 台座合成時のみ表示する、台座選択のラジオボタンと合成実行ボタンを縦方向で配置
+        # 台座オプション（ラジオ＆実行）
         self.base_options_frame = ttk.Frame(self.operation_frame)
-        # ラジオボタンを縦に配置
         for size in ["16mm", "14mm", "12mm", "10mm"]:
             rbtn = ttk.Radiobutton(
                 self.base_options_frame,
@@ -142,20 +135,18 @@ class ImageProcessingApp:
                 value=size,
                 command=self.update_selected_base_label
             )
-            rbtn.pack(side=tk.TOP, anchor="w", pady=5)
-        # 合成実行ボタンも縦に配置
+            rbtn.pack(anchor="w", pady=5)
         self.apply_base_btn = ttk.Button(
             self.base_options_frame,
             text="合成実行",
             command=self.combine_base
         )
-        self.apply_base_btn.pack(side=tk.TOP, pady=5)
-        # 初期状態は非表示（台座合成ボタンを押したときに表示）
+        self.apply_base_btn.pack(pady=5)
         self.base_options_frame.grid_remove()
 
-        # 結果表示フレーム
+        # 右側：結果表示
         self.result_frame = ttk.LabelFrame(self.main_frame, text="処理結果", padding="20")
-        self.result_frame.grid(row=0, column=1, padx=10, pady=5, sticky=(tk.W, tk.E, tk.N, tk.S))
+        self.result_frame.grid(row=0, column=1, padx=10, pady=5, sticky="nsew")
         self.result_frame.grid_columnconfigure(0, weight=1)
         self.result_frame.grid_rowconfigure(0, weight=1)
 
@@ -167,8 +158,7 @@ class ImageProcessingApp:
             anchor="center",
             justify="center"
         )
-        self.result_label.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=10, pady=10)
-
+        self.result_label.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
         self.result_label.bind('<MouseWheel>', self.on_mousewheel)
         self.result_label.bind('<Button-4>', self.on_mousewheel)
         self.result_label.bind('<Button-5>', self.on_mousewheel)
@@ -178,234 +168,163 @@ class ImageProcessingApp:
         self.drop_area.dnd_bind('<<DragEnter>>', self.handle_drag_enter)
         self.drop_area.dnd_bind('<<DragLeave>>', self.handle_drag_leave)
 
-        style.configure("TLabel", anchor="center", justify="center")
-
     def toggle_base_options(self):
-        """台座合成ボタンを押すと、台座選択ラジオボタンと合成実行ボタンのフレームを表示/非表示にする"""
         if self.base_options_frame.winfo_ismapped():
             self.base_options_frame.grid_remove()
         else:
-            self.base_options_frame.grid(row=2, column=0, columnspan=3, pady=(10, 0))
-            print("台座を選択し、合成実行をクリックしてください。")
+            self.base_options_frame.grid(row=2, column=0, columnspan=3, pady=(10,0))
 
     def update_selected_base_label(self, *args):
-        selected = self.base_var.get()
-        if selected:
-            self.selected_base_label.configure(text=f"選択中の台座: {selected}")
-        else:
-            self.selected_base_label.configure(text="")
+        self.selected_base_label.configure(text=f"選択中の台座: {self.base_var.get()}")
 
     def select_file(self):
-        file_path = filedialog.askopenfilename(
-            filetypes=[("Image files", "*.png *.jpg *.jpeg *.gif *.bmp"), ("All files", "*.*")]
-        )
-        if file_path:
-            class DummyEvent:
-                pass
-            event = DummyEvent()
-            event.data = file_path
-            self.handle_drop(event)
+        path = filedialog.askopenfilename(filetypes=[("Image files","*.png *.jpg *.jpeg *.bmp"),("All","*.*")])
+        if path:
+            class E: pass
+            e = E(); e.data = path
+            self.handle_drop(e)
 
     def handle_drop(self, event):
-        file_path = event.data.strip('{}').strip('"')
-        print(f"Processed path: {file_path}")
+        fp = event.data.strip('{}').strip('"')
         try:
-            image = Image.open(file_path)
-            self.current_image = image
-            self.update_image_display(image)
-            # 各処理ボタンを有効化
+            img = Image.open(fp)
+            self.current_image = img
+            self.update_image_display(img)
             self.outline_btn.configure(state="normal")
             self.combine_btn.configure(state="normal")
             self.output_btn.configure(state="normal")
-            print(f"Successfully loaded: {file_path}")
         except Exception as e:
-            print(f"Error loading image: {e}")
+            print("Error loading:", e)
 
     def handle_drag_enter(self, event):
         self.drop_area.configure(relief="sunken")
-
     def handle_drag_leave(self, event):
         self.drop_area.configure(relief="solid")
 
-    def update_image_display(self, pil_image):
-        if not pil_image:
-            return
-        self.current_display_image = pil_image
-        w, h = pil_image.size
-        zoom_w = int(w * self.zoom_factor)
-        zoom_h = int(h * self.zoom_factor)
-        zoomed_image = pil_image.resize((zoom_w, zoom_h), Image.Resampling.LANCZOS)
-        photo = ImageTk.PhotoImage(zoomed_image)
+    def update_image_display(self, pil_img):
+        self.current_display_image = pil_img
+        w,h = pil_img.size
+        zw,zh = int(w*self.zoom_factor), int(h*self.zoom_factor)
+        photo = ImageTk.PhotoImage(pil_img.resize((zw,zh), Image.Resampling.LANCZOS))
         self.result_label.configure(image=photo, text="")
         self.result_label.image = photo
 
     def on_mousewheel(self, event):
-        if not self.current_display_image:
-            return
-        if hasattr(event, 'delta'):
-            if event.delta < 0:
-                self.zoom_factor = max(self.min_zoom, self.zoom_factor * 0.9)
-            else:
-                self.zoom_factor = min(self.max_zoom, self.zoom_factor * 1.1)
+        if not self.current_display_image: return
+        if hasattr(event,'delta'):
+            self.zoom_factor *= 1.1 if event.delta>0 else 0.9
         else:
-            if event.num == 5:
-                self.zoom_factor = max(self.min_zoom, self.zoom_factor * 0.9)
-            elif event.num == 4:
-                self.zoom_factor = min(self.max_zoom, self.zoom_factor * 1.1)
+            self.zoom_factor *= 1.1 if event.num==4 else 0.9
+        self.zoom_factor = max(self.min_zoom, min(self.max_zoom, self.zoom_factor))
         self.update_image_display(self.current_display_image)
 
-    # 統一した二値化処理
-    def get_binary_mask(self, image_cv):
-        gray = cv2.cvtColor(image_cv, cv2.COLOR_BGR2GRAY)
-        ret, mask = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        if np.mean(mask) > 127:
+    def get_binary_mask(self, img_bgr):
+        gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+        ret,mask = cv2.threshold(gray,0,255,cv2.THRESH_BINARY+cv2.THRESH_OTSU)
+        if np.mean(mask)>127:
             mask = cv2.bitwise_not(mask)
-        print(f"Otsu threshold: {ret}, mask mean: {np.mean(mask):.2f}")
         return mask
 
-    # 輪郭線作成
     def create_outline(self):
-        print("輪郭線作成開始...")
         try:
-            image_cv = cv2.cvtColor(np.array(self.current_image), cv2.COLOR_RGB2BGR)
-            binary = self.get_binary_mask(image_cv)
-            gap = self.gap
-            thickness = self.thickness
-            kernel_gap = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2*gap+1, 2*gap+1))
-            dilate_gap = cv2.dilate(binary, kernel_gap, iterations=1)
-            kernel_thick = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2*(gap+thickness)+1, 2*(gap+thickness)+1))
-            dilate_thick = cv2.dilate(binary, kernel_thick, iterations=1)
-            ring = cv2.subtract(dilate_thick, dilate_gap)
-            result = image_cv.copy()
-            result[ring == 255] = (0, 0, 255)
-            result_rgb = cv2.cvtColor(result, cv2.COLOR_BGR2RGB)
-            pil_result = Image.fromarray(result_rgb)
-            self.outlined_image = pil_result
-            self.update_image_display(pil_result)
-            print("輪郭線作成が完了しました。")
+            img_bgr = cv2.cvtColor(np.array(self.current_image), cv2.COLOR_RGB2BGR)
+            binm = self.get_binary_mask(img_bgr)
+            k1 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE,(2*self.gap+1,2*self.gap+1))
+            k2 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE,(2*(self.gap+self.thickness)+1,2*(self.gap+self.thickness)+1))
+            ring = cv2.subtract(cv2.dilate(binm,k2), cv2.dilate(binm,k1))
+            res = img_bgr.copy()
+            res[ring==255] = (0,0,255)
+            pil = Image.fromarray(cv2.cvtColor(res,cv2.COLOR_BGR2RGB))
+            self.outlined_image = pil
+            self.update_image_display(pil)
         except Exception as e:
-            print(f"Error in create_outline: {e}")
+            print("Error in create_outline:", e)
             traceback.print_exc()
 
-    # 輪郭デバッグ処理（必要なければ削除しても構いません）
-    def debug_show_contours(self):
-        print("輪郭デバッグ開始...")
-        try:
-            source_image = self.outlined_image if self.outlined_image is not None else self.current_image
-            if source_image is None:
-                print("画像が読み込まれていません。")
-                return
-            img = np.array(source_image.convert("RGB"))
-            img_bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-            binary = self.get_binary_mask(img_bgr)
-            contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            if len(contours) == 0:
-                print("輪郭が検出されませんでした。")
-                return
-            main_contour = max(contours, key=cv2.contourArea)
-            bottom_y = max(pt[0][1] for pt in main_contour)
-            lower_points = [pt[0] for pt in main_contour if pt[0][1] >= bottom_y - 20]
-            if not lower_points:
-                lower_points = [pt[0] for pt in main_contour]
-            x_vals = [pt[0] for pt in lower_points]
-            left_x = min(x_vals)
-            right_x = max(x_vals)
-            print(f"[輪郭デバッグ] 下端 y = {bottom_y}, 左 x = {left_x}, 右 x = {right_x}")
-            debug_img = img.copy()
-            cv2.drawContours(debug_img, [main_contour], -1, (255, 0, 0), 2)
-            cv2.circle(debug_img, (left_x, bottom_y), 5, (0, 0, 255), -1)
-            cv2.circle(debug_img, (right_x, bottom_y), 5, (0, 0, 255), -1)
-            cv2.circle(debug_img, (int((left_x+right_x)/2), bottom_y), 5, (0, 255, 255), -1)
-            result_pil = Image.fromarray(debug_img)
-            self.update_image_display(result_pil)
-            print("輪郭デバッグが完了しました。")
-        except Exception as e:
-            print("Error in debug_show_contours:", e)
-            traceback.print_exc()
-
-    # 台座合成（背景切り抜き・トリミングした画像と、キャラクター全体幅に基づいた補完線延長）
     def combine_base(self):
-        print("台座合成開始...")
         try:
-            # 1) 輪郭抽出とバウンディングボックス取得
-            source = self.outlined_image if self.outlined_image is not None else self.current_image
-            if source is None:
-                print("画像が読み込まれていません。")
-                return
-
-            img = np.array(source.convert("RGB"))
+            # ソース画像取得
+            src = self.outlined_image or self.current_image
+            img = np.array(src.convert("RGB"))
             img_bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+
+            # 二値マスク＆輪郭取得
             mask = self.get_binary_mask(img_bgr)
-            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            if len(contours) == 0:
-                print("輪郭が検出されませんでした。")
-                return
-            main_contour = max(contours, key=cv2.contourArea)
-            x_full, y_full, w_full, h_full = cv2.boundingRect(main_contour)
+            cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            main = max(cnts, key=cv2.contourArea)
 
-            # 2) トリミング（背景除去）
-            cropped_bgr = img_bgr[y_full : y_full + h_full, x_full : x_full + w_full]
-            cropped_rgba = Image.fromarray(cv2.cvtColor(cropped_bgr, cv2.COLOR_BGR2RGB)).convert("RGBA")
+            # 輪郭バウンディングボックスでトリミング
+            x, y, w, h = cv2.boundingRect(main)
+            crop = img_bgr[y:y+h, x:x+w]
+            cropped = Image.fromarray(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)).convert("RGBA")
 
-            # 3) 下端座標の計算（ローカル座標系）
-            bottom_y_global = max(pt[0][1] for pt in main_contour)
-            bottom_y_local = bottom_y_global - y_full
+            # 輪郭上の最下点（足先候補）の抽出
+            y_max = max(pt[0][1] for pt in main)
+            δ = 5
+            feet_pts = [pt[0] for pt in main if pt[0][1] >= y_max - δ]
+            if not feet_pts:
+                feet_pts = [pt[0] for pt in main]
+            x_left = min(p[0] for p in feet_pts) - x
+            x_right = max(p[0] for p in feet_pts) - x
+            y_feet = y_max - y  # トリミング後の足先 Y
 
-            lower_points = [pt[0] for pt in main_contour if pt[0][1] >= bottom_y_global - 5]
-            if not lower_points:
-                lower_points = [pt[0] for pt in main_contour]
-            foot_left_local = min([p[0] for p in lower_points]) - x_full
-            foot_right_local = max([p[0] for p in lower_points]) - x_full
-            foot_width_local = foot_right_local - foot_left_local
+            # 補完線水平幅：左端は足先左、右端はトリミング幅
+            cl, cr = x_left, w
 
-            print(f"[補完線] 下端 y(local) = {bottom_y_local}, 足元幅 = {foot_width_local}, 全体幅 = {w_full}")
-
-            # ★★ 修正部分：右端をバウンディングボックス右端 (= w_full) にする ★★
-            comp_line_left_local = foot_left_local
-            comp_line_right_local = w_full
-
-            # 4) 合成キャンバス設定
-            char_w, char_h = cropped_rgba.size
-            base_key = self.base_var.get()  # 選択中の台座
-            base_filename = self.base_parts.get(base_key, "")
-            pedestal_size = self.base_sizes.get(base_key, (200, 40))
-
-            # 台座画像の取得・リサイズ
-            if os.path.exists(base_filename):
-                pedestal_cv = cv2.imread(base_filename, cv2.IMREAD_UNCHANGED)
-                pedestal_cv = cv2.resize(pedestal_cv, pedestal_size, interpolation=cv2.INTER_AREA)
-                pedestal_cv = cv2.cvtColor(pedestal_cv, cv2.COLOR_BGRA2RGBA)
-                pedestal_img = Image.fromarray(pedestal_cv)
+            # 台座画像準備
+            key = self.base_var.get()
+            fn = self.base_parts.get(key, "")
+            sz = self.base_sizes.get(key, (200, 40))
+            if os.path.exists(fn):
+                ped_cv = cv2.imread(fn, cv2.IMREAD_UNCHANGED)
+                ped_cv = cv2.resize(ped_cv, sz, interpolation=cv2.INTER_AREA)
+                ped_cv = cv2.cvtColor(ped_cv, cv2.COLOR_BGRA2RGBA)
+                pedestal = Image.fromarray(ped_cv)
             else:
-                print(f"台座ファイルが見つかりません: {base_filename}")
-                pedestal_img = Image.new("RGBA", pedestal_size, (128,128,128,255))
-            ped_w, ped_h = pedestal_img.size
+                pedestal = Image.new("RGBA", sz, (128, 128, 128, 255))
+            pw, ph = pedestal.size
 
-            # キャンバスサイズ：横幅はキャラ画像と台座画像の最大、縦はキャラ高さ＋台座高さ
-            comp_w = max(char_w, ped_w)
-            comp_h = char_h + ped_h
-            composite = Image.new("RGBA", (comp_w, comp_h), (0, 0, 0, 0))
+            # (A) トリミング後の輪郭マスクを作成
+            # crop は BGR の NumPy 配列
+            binm_crop = self.get_binary_mask(crop)  # 0/255 の mask
+            # 輪郭線部分だけ 255 のバイナリマスク
+            # 膨張など不要ならこのまま使えます
 
-            # キャラクター画像をキャンバス上部中央に配置
-            char_x = (comp_w - char_w) // 2
-            composite.paste(cropped_rgba, (char_x, 0), cropped_rgba)
+            # --- 合成キャンバス作成＆台座貼付 ---
+            cw, ch = cropped.size
+            W, H = max(cw, pw), ch + ph
+            comp = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+            cx = (W - cw) // 2
+            comp.paste(cropped, (cx, 0), cropped)
+            # 水平線
+            draw = ImageDraw.Draw(comp)
+            ly = y_feet
+            draw.line([(cx + cl, ly), (cx + cr, ly)], fill=(255, 0, 0, 255), width=2)
+            # 台座貼付
+            px, py = (W - pw) // 2, ly
+            comp.paste(pedestal, (px, py), pedestal)
 
-            # 5) 補完線を描画
-            draw = ImageDraw.Draw(composite)
-            line_color = (255, 0, 0, 255)  # 赤色
-            line_thickness = 2
-            line_y = bottom_y_local  # トリミング後画像内での足元座標
-            line_left = char_x + comp_line_left_local
-            line_right = char_x + comp_line_right_local
-            draw.line([(line_left, line_y), (line_right, line_y)], fill=line_color, width=line_thickness)
+            # --- (B) トリミングマスク上で衝突検出 ---
+            # mask_crop[y_rel, x_rel] でチェックする
+            # x_rel は台座端の comp 上 X から cx を引いたもの
+            offset = 65
+            comp_right_x = px + pw + offset
+            x_rel = comp_right_x - cx
+            # y_feet_rel は y_feet（トリミング後Y）そのまま
+            y_end_rel = ly  # フォールバックは水平線位置
+            for y_rel in range(y_feet, -1, -1):
+                if y_rel < 0 or y_rel >= binm_crop.shape[0] or x_rel < 0 or x_rel >= binm_crop.shape[1]:
+                    continue
+                if binm_crop[y_rel, x_rel] == 255:
+                    y_end_rel = y_rel
+                    break
 
-            # 6) 台座を足元に配置（補完線と連続する位置に配置）
-            ped_x = (comp_w - ped_w) // 2
-            ped_y = line_y  # 補完線直下に貼り付け
-            composite.paste(pedestal_img, (ped_x, ped_y), pedestal_img)
+            # (C) 相対座標をキャンバス座標に変換して線を引く
+            y_end = y_end_rel  # since top of comp matches y=0 of cropped
+            draw.line([(comp_right_x, y_feet), (comp_right_x, y_end)], fill=(255, 0, 0, 255), width=2)
 
-            self.update_image_display(composite)
-            print(f"台座合成が完了しました。[選択された台座: {base_key}]")
+            # 更新
+            self.update_image_display(comp)
 
         except Exception as e:
             print("Error in combine_base:", e)
