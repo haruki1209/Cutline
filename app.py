@@ -16,7 +16,7 @@ class ImageProcessingApp:
         # 画像保持用
         self.current_image = None
         self.outlined_image = None
-        self.complement_image = None
+        self.complement_image = None  # 補完線作成結果保存用
         self.current_display_image = None
         self.zoom_factor = 1.0
         self.min_zoom = 0.1
@@ -26,7 +26,8 @@ class ImageProcessingApp:
         self.gap = 20
         self.thickness = 3
 
-        # 台座関連の設定
+        # 台座関連の設定（既存台座画像がある前提）
+        # ラジオボタンにより1つのオプションが選択される形式とする
         self.base_var = tk.StringVar(value="16mm")
         self.base_parts = {
             "16mm": "nichidai_base_16mm.png",
@@ -34,6 +35,7 @@ class ImageProcessingApp:
             "12mm": "nichidai_base_12mm.png",
             "10mm": "nichidai_base_10mm.png"
         }
+        # 台座画像のリサイズサイズ（幅×高さ）
         self.base_sizes = {
             "16mm": (200, 40),
             "14mm": (175, 35),
@@ -55,7 +57,7 @@ class ImageProcessingApp:
         self.left_frame.grid(row=0, column=0, padx=10, pady=5, sticky=(tk.W, tk.E, tk.N, tk.S))
         self.left_frame.grid_columnconfigure(0, weight=1)
 
-        # 画像アップロード
+        # 画像アップロードフレーム
         self.upload_frame = ttk.LabelFrame(self.left_frame, text="画像アップロード", padding="20")
         self.upload_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         self.upload_frame.grid_columnconfigure(0, weight=1)
@@ -86,7 +88,8 @@ class ImageProcessingApp:
         # 操作フレーム
         self.operation_frame = ttk.LabelFrame(self.left_frame, text="操作", padding="20")
         self.operation_frame.grid(row=1, column=0, pady=(10,0), sticky=(tk.W, tk.E))
-        for i in range(4):
+        # 3列配置：輪郭線作成、台座合成、画像出力
+        for i in range(3):
             self.operation_frame.grid_columnconfigure(i, weight=1)
 
         self.outline_btn = ttk.Button(
@@ -99,17 +102,8 @@ class ImageProcessingApp:
         )
         self.outline_btn.grid(row=0, column=0, padx=5)
 
-        self.contour_debug_btn = ttk.Button(
-            self.operation_frame,
-            text="輪郭デバッグ",
-            style="Gray.TButton",
-            width=15,
-            command=self.debug_show_contours,
-            state="disabled"
-        )
-        self.contour_debug_btn.grid(row=0, column=1, padx=5)
-
-        # ★ 台座合成ボタンを押すと、台座選択ラジオボタンを表示
+        # ここでは輪郭デバッグボタンは削除
+        # 台座合成ボタン（これを押すと台座選択ラジオボタンと合成実行ボタンが下に現れる）
         self.combine_btn = ttk.Button(
             self.operation_frame,
             text="台座合成",
@@ -118,7 +112,7 @@ class ImageProcessingApp:
             command=self.toggle_base_options,
             state="disabled"
         )
-        self.combine_btn.grid(row=0, column=2, padx=5)
+        self.combine_btn.grid(row=0, column=1, padx=5)
 
         self.output_btn = ttk.Button(
             self.operation_frame,
@@ -127,7 +121,7 @@ class ImageProcessingApp:
             width=15,
             state="disabled"
         )
-        self.output_btn.grid(row=0, column=3, padx=5)
+        self.output_btn.grid(row=0, column=2, padx=5)
 
         self.selected_base_label = ttk.Label(
             self.operation_frame,
@@ -135,12 +129,11 @@ class ImageProcessingApp:
             font=("Helvetica", 9),
             foreground='#666666'
         )
-        self.selected_base_label.grid(row=1, column=0, columnspan=4, pady=(5, 0))
+        self.selected_base_label.grid(row=1, column=0, columnspan=3, pady=(5, 0))
 
-        # ▼ 台座の選択フレーム（はじめは非表示にする）
+        # ▼ 台座合成時のみ表示する、台座選択のラジオボタンと合成実行ボタンを縦方向で配置
         self.base_options_frame = ttk.Frame(self.operation_frame)
-
-        # ここでラジオボタンを縦方向に配置する
+        # ラジオボタンを縦に配置
         for size in ["16mm", "14mm", "12mm", "10mm"]:
             rbtn = ttk.Radiobutton(
                 self.base_options_frame,
@@ -149,17 +142,15 @@ class ImageProcessingApp:
                 value=size,
                 command=self.update_selected_base_label
             )
-            rbtn.pack(side=tk.TOP, anchor='w', pady=5)
-
-        # 合成実行ボタンも縦方向に配置
+            rbtn.pack(side=tk.TOP, anchor="w", pady=5)
+        # 合成実行ボタンも縦に配置
         self.apply_base_btn = ttk.Button(
             self.base_options_frame,
             text="合成実行",
             command=self.combine_base
         )
         self.apply_base_btn.pack(side=tk.TOP, pady=5)
-
-        # 初期状態では非表示（台座合成ボタンを押して表示）
+        # 初期状態は非表示（台座合成ボタンを押したときに表示）
         self.base_options_frame.grid_remove()
 
         # 結果表示フレーム
@@ -190,13 +181,11 @@ class ImageProcessingApp:
         style.configure("TLabel", anchor="center", justify="center")
 
     def toggle_base_options(self):
-        """台座合成ボタンを押したときに、台座選択ラジオボタンと合成実行ボタンを表示/非表示にする"""
+        """台座合成ボタンを押すと、台座選択ラジオボタンと合成実行ボタンのフレームを表示/非表示にする"""
         if self.base_options_frame.winfo_ismapped():
-            # すでに表示されているなら隠す
             self.base_options_frame.grid_remove()
         else:
-            # 非表示なら表示する
-            self.base_options_frame.grid(row=2, column=0, columnspan=4, pady=(10, 0))
+            self.base_options_frame.grid(row=2, column=0, columnspan=3, pady=(10, 0))
             print("台座を選択し、合成実行をクリックしてください。")
 
     def update_selected_base_label(self, *args):
@@ -224,9 +213,8 @@ class ImageProcessingApp:
             image = Image.open(file_path)
             self.current_image = image
             self.update_image_display(image)
-            # 処理ボタンを有効化
+            # 各処理ボタンを有効化
             self.outline_btn.configure(state="normal")
-            self.contour_debug_btn.configure(state="normal")
             self.combine_btn.configure(state="normal")
             self.output_btn.configure(state="normal")
             print(f"Successfully loaded: {file_path}")
@@ -260,10 +248,9 @@ class ImageProcessingApp:
             else:
                 self.zoom_factor = min(self.max_zoom, self.zoom_factor * 1.1)
         else:
-            # Linuxなどdelta未対応の場合のフォールバック
-            if event.num == 5:  # スクロールダウン
+            if event.num == 5:
                 self.zoom_factor = max(self.min_zoom, self.zoom_factor * 0.9)
-            elif event.num == 4:  # スクロールアップ
+            elif event.num == 4:
                 self.zoom_factor = min(self.max_zoom, self.zoom_factor * 1.1)
         self.update_image_display(self.current_display_image)
 
@@ -300,7 +287,7 @@ class ImageProcessingApp:
             print(f"Error in create_outline: {e}")
             traceback.print_exc()
 
-    # 輪郭デバッグ処理
+    # 輪郭デバッグ処理（必要なければ削除しても構いません）
     def debug_show_contours(self):
         print("輪郭デバッグ開始...")
         try:
@@ -336,7 +323,7 @@ class ImageProcessingApp:
             print("Error in debug_show_contours:", e)
             traceback.print_exc()
 
-    # 台座合成ボタンを押した後、「合成実行」で呼ばれるのがこのメソッド
+    # 台座合成（背景切り抜き・トリミングした画像と、キャラクター全体幅に基づいた補完線延長）
     def combine_base(self):
         print("台座合成開始...")
         try:
@@ -373,7 +360,7 @@ class ImageProcessingApp:
 
             print(f"[補完線] 下端 y(local) = {bottom_y_local}, 足元幅 = {foot_width_local}, 全体幅 = {w_full}")
 
-            # 補完線の左右端を計算
+            # ★★ 修正部分：右端をバウンディングボックス右端 (= w_full) にする ★★
             comp_line_left_local = foot_left_local
             comp_line_right_local = w_full
 
@@ -394,7 +381,7 @@ class ImageProcessingApp:
                 pedestal_img = Image.new("RGBA", pedestal_size, (128,128,128,255))
             ped_w, ped_h = pedestal_img.size
 
-            # キャンバス：横幅はキャラ画像と台座画像の最大、縦はキャラ高さ＋台座高さ
+            # キャンバスサイズ：横幅はキャラ画像と台座画像の最大、縦はキャラ高さ＋台座高さ
             comp_w = max(char_w, ped_w)
             comp_h = char_h + ped_h
             composite = Image.new("RGBA", (comp_w, comp_h), (0, 0, 0, 0))
@@ -403,29 +390,26 @@ class ImageProcessingApp:
             char_x = (comp_w - char_w) // 2
             composite.paste(cropped_rgba, (char_x, 0), cropped_rgba)
 
-            # 補完線を描画
+            # 5) 補完線を描画
             draw = ImageDraw.Draw(composite)
-            line_color = (255, 0, 0, 255)
+            line_color = (255, 0, 0, 255)  # 赤色
             line_thickness = 2
-            line_y = bottom_y_local
+            line_y = bottom_y_local  # トリミング後画像内での足元座標
             line_left = char_x + comp_line_left_local
             line_right = char_x + comp_line_right_local
-            draw.line([(line_left, line_y), (line_right, line_y)],
-                      fill=line_color, width=line_thickness)
+            draw.line([(line_left, line_y), (line_right, line_y)], fill=line_color, width=line_thickness)
 
-            # 台座を足元に配置
+            # 6) 台座を足元に配置（補完線と連続する位置に配置）
             ped_x = (comp_w - ped_w) // 2
-            ped_y = line_y
+            ped_y = line_y  # 補完線直下に貼り付け
             composite.paste(pedestal_img, (ped_x, ped_y), pedestal_img)
 
-            # 表示
             self.update_image_display(composite)
             print(f"台座合成が完了しました。[選択された台座: {base_key}]")
 
         except Exception as e:
             print("Error in combine_base:", e)
             traceback.print_exc()
-
 
 def main():
     root = TkinterDnD.Tk()
