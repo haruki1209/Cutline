@@ -258,7 +258,6 @@ class ImageProcessingApp:
             crop = img_bgr[y:y+h, x:x+w]
             cropped = Image.fromarray(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)).convert("RGBA")
 
-            # 輪郭上の最下点（足先候補）の抽出
             y_max = max(pt[0][1] for pt in main)
             δ = 5
             feet_pts = [pt[0] for pt in main if pt[0][1] >= y_max - δ]
@@ -266,9 +265,7 @@ class ImageProcessingApp:
                 feet_pts = [pt[0] for pt in main]
             x_left = min(p[0] for p in feet_pts) - x
             x_right = max(p[0] for p in feet_pts) - x
-            y_feet = y_max - y  # トリミング後の足先 Y
-
-            # 補完線水平幅：左端は足先左、右端はトリミング幅
+            y_feet = y_max - y
             cl, cr = x_left, w
 
             # 台座画像準備
@@ -283,14 +280,8 @@ class ImageProcessingApp:
             else:
                 pedestal = Image.new("RGBA", sz, (128, 128, 128, 255))
             pw, ph = pedestal.size
+            binm_crop = self.get_binary_mask(crop)  
 
-            # (A) トリミング後の輪郭マスクを作成
-            # crop は BGR の NumPy 配列
-            binm_crop = self.get_binary_mask(crop)  # 0/255 の mask
-            # 輪郭線部分だけ 255 のバイナリマスク
-            # 膨張など不要ならこのまま使えます
-
-            # --- 合成キャンバス作成＆台座貼付 ---
             cw, ch = cropped.size
             W, H = max(cw, pw), ch + ph
             comp = Image.new("RGBA", (W, H), (0, 0, 0, 0))
@@ -303,24 +294,17 @@ class ImageProcessingApp:
             # 台座貼付
             px, py = (W - pw) // 2, ly
             comp.paste(pedestal, (px, py), pedestal)
-
-            # --- (B) トリミングマスク上で衝突検出 ---
-            # mask_crop[y_rel, x_rel] でチェックする
-            # x_rel は台座端の comp 上 X から cx を引いたもの
             offset = 65
             comp_right_x = px + pw + offset
             x_rel = comp_right_x - cx
-            # y_feet_rel は y_feet（トリミング後Y）そのまま
-            y_end_rel = ly  # フォールバックは水平線位置
+            y_end_rel = ly
             for y_rel in range(y_feet, -1, -1):
                 if y_rel < 0 or y_rel >= binm_crop.shape[0] or x_rel < 0 or x_rel >= binm_crop.shape[1]:
                     continue
                 if binm_crop[y_rel, x_rel] == 255:
                     y_end_rel = y_rel
                     break
-
-            # (C) 相対座標をキャンバス座標に変換して線を引く
-            y_end = y_end_rel  # since top of comp matches y=0 of cropped
+            y_end = y_end_rel
             draw.line([(comp_right_x, y_feet), (comp_right_x, y_end)], fill=(255, 0, 0, 255), width=2)
 
             # 更新
