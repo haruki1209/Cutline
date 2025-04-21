@@ -243,7 +243,7 @@ class ImageProcessingApp:
 
     def combine_base(self):
         try:
-            # ソース画像取得
+            # --- 既存処理 ---
             src = self.outlined_image or self.current_image
             img = np.array(src.convert("RGB"))
             img_bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
@@ -253,14 +253,16 @@ class ImageProcessingApp:
             cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             main = max(cnts, key=cv2.contourArea)
 
-            # 輪郭バウンディングボックスでトリミング
+
+            # トリミング
             x, y, w, h = cv2.boundingRect(main)
             crop = img_bgr[y:y+h, x:x+w]
             cropped = Image.fromarray(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)).convert("RGBA")
 
+            # 足元ライン
             y_max = max(pt[0][1] for pt in main)
-            δ = 5
-            feet_pts = [pt[0] for pt in main if pt[0][1] >= y_max - δ]
+            delta = 5
+            feet_pts = [pt[0] for pt in main if pt[0][1] >= y_max - delta]
             if not feet_pts:
                 feet_pts = [pt[0] for pt in main]
             x_left = min(p[0] for p in feet_pts) - x
@@ -268,51 +270,99 @@ class ImageProcessingApp:
             y_feet = y_max - y
             cl, cr = x_left, w
 
-            # 台座画像準備
+
+            # 台座準備
             key = self.base_var.get()
             fn = self.base_parts.get(key, "")
             sz = self.base_sizes.get(key, (200, 40))
             if os.path.exists(fn):
-                ped_cv = cv2.imread(fn, cv2.IMREAD_UNCHANGED)
-                ped_cv = cv2.resize(ped_cv, sz, interpolation=cv2.INTER_AREA)
-                ped_cv = cv2.cvtColor(ped_cv, cv2.COLOR_BGRA2RGBA)
-                pedestal = Image.fromarray(ped_cv)
+                ped = cv2.resize(cv2.cvtColor(cv2.imread(fn, cv2.IMREAD_UNCHANGED), cv2.COLOR_BGRA2RGBA), sz)
+                pedestal = Image.fromarray(ped)
             else:
                 pedestal = Image.new("RGBA", sz, (128, 128, 128, 255))
             pw, ph = pedestal.size
-            binm_crop = self.get_binary_mask(crop)  
+            binm_crop = self.get_binary_mask(crop)
 
+            # キャンバス
             cw, ch = cropped.size
             W, H = max(cw, pw), ch + ph
             comp = Image.new("RGBA", (W, H), (0, 0, 0, 0))
             cx = (W - cw) // 2
             comp.paste(cropped, (cx, 0), cropped)
-            # 水平線
+
+
+            # 赤ガイド線描画
             draw = ImageDraw.Draw(comp)
-            ly = y_feet
-            draw.line([(cx + cl, ly), (cx + cr, ly)], fill=(255, 0, 0, 255), width=2)
-            # 台座貼付
-            px, py = (W - pw) // 2, ly
+            draw.line([(cx+cl, y_feet), (cx+cr, y_feet)], fill=(255,0,0,255), width=2)
+            px, py = (W-pw)//2, y_feet
             comp.paste(pedestal, (px, py), pedestal)
-            offset = 65
-            comp_right_x = px + pw + offset
+            comp_right_x = px + pw + 65
             x_rel = comp_right_x - cx
-            y_end_rel = ly
+            y_end_rel = y_feet
             for y_rel in range(y_feet, -1, -1):
-                if y_rel < 0 or y_rel >= binm_crop.shape[0] or x_rel < 0 or x_rel >= binm_crop.shape[1]:
-                    continue
-                if binm_crop[y_rel, x_rel] == 255:
+                if 0 <= y_rel < binm_crop.shape[0] and 0 <= x_rel < binm_crop.shape[1] and binm_crop[y_rel, x_rel] == 255:
                     y_end_rel = y_rel
                     break
-            y_end = y_end_rel
-            draw.line([(comp_right_x, y_feet), (comp_right_x, y_end)], fill=(255, 0, 0, 255), width=2)
+            draw.line([(comp_right_x, y_feet), (comp_right_x, y_end_rel)], fill=(255,0,0,255), width=2)
 
-            # 更新
-            self.update_image_display(comp)
+
+            # --- 新規: 赤ガイド線から太もも・剣内側・足元内側だけ緑ハイライト ---
+            comp_np = np.array(comp)
+            H_img, W_img = comp_np.shape[:2]
+            R, G, Bc, A = cv2.split(comp_np)
+            red_mask = (R>200)&(G<50)&(Bc<50)&(A>0)
+
+            # キャラ内部マスク
+            crop_bool = binm_crop.astype(bool)
+            mask_full = np.zeros((H_img, W_img), bool)
+            mask_full[0:ch, cx:cx+cw] = crop_bool
+            mask_full[y_feet+1:, :] = False
+
+
+            # 1) 太ももマスク
+            tx0 = cx + int(cw*0.25)
+            tx1 = cx + int(cw*0.6)
+            ty0 = int(ch*0.4)
+            ty1 = int(ch*0.75)
+            thigh_roi = np.zeros((H_img, W_img), bool)
+            thigh_roi[ty0:ty1, tx0:tx1] = True
+            thigh_mask = red_mask & thigh_roi & mask_full
+
+            # 2) 剣内側マスク（矩形ROI：補助線の手前まで）
+            sx0 = cx + int(cw * 0.5)
+            sx1 = comp_right_x - 1
+            sy0 = 0
+            sy1 = ch
+            sword_roi = np.zeros((H_img, W_img), bool)
+            sword_roi[sy0:sy1, sx0:sx1] = True
+            sword_mask = red_mask & mask_full & sword_roi
+
+                        # 3) 足元内側マスク（水平線より上、左足ラインの右側）
+            fx = cx + cl
+            # ROI：足元水平線の上側かつ左足ラインの右側（体本体側）
+            foot_roi = np.zeros((H_img, W_img), bool)
+            # y<y_feet, x>=fx, x<=cx+cw//2 までを範囲として指定
+            center_x = cx + cw // 2
+            foot_roi[0:y_feet, fx:center_x] = True
+            foot_mask = red_mask & mask_full & foot_roi
+
+            # 緑オーバーレイ適用
+            overlay = np.zeros_like(comp_np)
+            overlay[...,1] = 255
+            overlay[...,3] = 150
+            mask_green = thigh_mask | sword_mask | foot_mask
+            comp_np[mask_green] = overlay[mask_green]
+
+            # 更新表示
+            result = Image.fromarray(comp_np)
+            self.update_image_display(result)
+
 
         except Exception as e:
             print("Error in combine_base:", e)
             traceback.print_exc()
+            result = Image.fromarray(comp_np)
+            self.update_image_display(result)
 
 def main():
     root = TkinterDnD.Tk()
