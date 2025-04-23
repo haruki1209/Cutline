@@ -341,33 +341,24 @@ class ImageProcessingApp:
             comp_np = np.array(comp)
             h_img, w_img = comp_np.shape[:2]
             
-            # 頂点を滑らかに調整し、より広範囲に内側領域を定義
-            # 1. 上部頂点の位置を調整
-            top_vertex = (right_foot_x - 40, max(0, top_y - 100))  # より左に移動し、上に伸ばす
-            # 2. 右側をなめらかなカーブに
-            right_top_vertex = (right_foot_x - 100, max(0, top_y - 40))  # 尖りを無くすよう調整
-            # 3. 右下頂点
-            right_bottom_vertex = (right_foot_x - 120, foot_y + 5)  # さらに左に
-            # 4. 左下頂点
-            left_bottom_vertex = (left_foot_x + 20, foot_y + 5)
-            # 5. 左上頂点（太ももライン上まで）
-            left_top_vertex = (left_foot_x + 30, top_y + 30)  # 右上に調整
-            # 6. 左上の肩頂点（鞘まで覆うよう広げる）
-            left_shoulder_vertex = (left_foot_x + 35, max(0, top_y - 80))  # 上に伸ばして鞘も覆う
-
-            # さらに両側に3つの制御点を追加して、8角形にして滑らかさを増す
-            mid_right_vertex = (right_foot_x - 115, top_y - 10)  # 右側中間部
-            mid_left_vertex = (left_foot_x + 30, top_y - 40)  # 左側中間部
+            # 頂点を調整
+            # 1. 上部頂点を左頂点に伸ばす
+            top_vertex = (left_foot_x + 80, max(0, top_y - 100))
+            # 2. 右上頂点をもう少しだけ外側に広げる
+            right_top_vertex = (right_foot_x - 70, max(0, top_y - 150))
+            # 3. 右中間頂点をガイド線に交わらせる
+            mid_right_vertex = (right_foot_x, top_y - 10)
+            # 4. 左下頂点を水平線と補助線の交わる点に配置
+            left_bottom_vertex = (right_foot_x, foot_y)
+            # 5. 左肩頂点を足元ラインの位置に移動
+            left_shoulder_vertex = (left_foot_x, foot_y)  # 足元ラインの左端に配置
 
             # 8頂点で構成（尖りを減らして滑らかに）
             vertices = np.array([
                 top_vertex,
                 right_top_vertex,
                 mid_right_vertex,
-                right_bottom_vertex,
                 left_bottom_vertex,
-                left_top_vertex,
-                mid_left_vertex,
                 left_shoulder_vertex
             ], dtype=np.int32)
 
@@ -377,21 +368,21 @@ class ImageProcessingApp:
             inside_area = polygon_mask > 0
 
             # デバッグ出力
-            print(f"五角形の頂点: {vertices}")
-            print(f"五角形の面積: {np.sum(inside_area)} ピクセル")
+            #print(f"五角形の頂点: {vertices}")
+            #print(f"五角形の面積: {np.sum(inside_area)} ピクセル")
 
             # デバッグ画像を作成
-            debug_image = comp_np.copy()
-            debug_overlay = np.zeros_like(debug_image)
-            debug_overlay[..., 2] = 255  # 青色
-            debug_overlay[..., 3] = 80   # 半透明
-            debug_image[inside_area] = debug_overlay[inside_area]
-            debug_result = Image.fromarray(debug_image)
-            debug_result.save("debug_pentagon_area.png")
+            #debug_image = comp_np.copy()
+            #debug_overlay = np.zeros_like(debug_image)
+            #debug_overlay[..., 2] = 255  # 青色
+            #debug_overlay[..., 3] = 80   # 半透明
+            #debug_image[inside_area] = debug_overlay[inside_area]
+            #debug_result = Image.fromarray(debug_image)
+            #debug_result.save("debug_pentagon_area.png")
 
             # 内側領域の座標範囲を出力
-            print(f"内側領域の範囲: 上部={top_y}, 下部={foot_y}, 左={left_foot_x}, 右={right_foot_x}")
-            print(f"内側領域のピクセル数: {np.sum(inside_area)}")
+            #print(f"内側領域の範囲: 上部={top_y}, 下部={foot_y}, 左={left_foot_x}, 右={right_foot_x}")
+            #print(f"内側領域のピクセル数: {np.sum(inside_area)}")
 
             # 赤線検出条件を元に戻す
             red_mask = np.zeros((h_img, w_img), dtype=bool)
@@ -399,16 +390,6 @@ class ImageProcessingApp:
 
             # 削除マスクを元に戻す - 内側領域の赤線のみ削除
             remove_mask = inside_area & red_mask
-
-            # デバッグ用の赤線範囲可視化部分は残す
-            debug_red_image = comp_np.copy()
-            debug_red_overlay = np.zeros_like(debug_red_image)
-            debug_red_overlay[..., 0] = 255  # 赤色
-            debug_red_overlay[..., 3] = 80   # 半透明
-            debug_red_image[remove_mask] = debug_red_overlay[remove_mask]
-            debug_red_result = Image.fromarray(debug_red_image)
-            debug_red_result.save("debug_red_lines.png")
-            print("赤線検出領域を保存しました: debug_red_lines.png")
 
             # 赤線除去 - 検出された全ての赤線を透明化
             comp_np[remove_mask, 3] = 0
@@ -426,6 +407,38 @@ class ImageProcessingApp:
             # 更新表示
             result = Image.fromarray(comp_np)
             self.update_image_display(result)
+
+            # 頂点を可視化するための処理を追加
+            debug_vertices_image = comp_np.copy()
+
+            # 各頂点に異なる色を付ける
+            colors = [
+                (255, 0, 0, 255),   # 赤 - 上部頂点
+                (0, 255, 0, 255),   # 緑 - 右上頂点
+                (0, 0, 255, 255),   # 青 - 右中間頂点
+                (255, 255, 0, 255), # 黄 - 右下頂点
+                (255, 0, 255, 255), # マゼンタ - 左下頂点
+                (0, 255, 255, 255), # シアン - 左上頂点
+                (128, 0, 128, 255), # 紫 - 左中間頂点
+                (255, 128, 0, 255)  # オレンジ - 左肩頂点
+            ]
+
+            # 各頂点に円と番号を描画
+            for i, (point, color) in enumerate(zip(vertices, colors)):
+                x, y = point
+                # 大きめの円を描画
+                cv2.circle(debug_vertices_image, (x, y), 10, color, -1)
+                # 周りに白い縁取り
+                cv2.circle(debug_vertices_image, (x, y), 12, (255, 255, 255, 255), 2)
+                # 頂点番号を表示
+                cv2.putText(debug_vertices_image, str(i+1), (x-5, y+5), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255, 255), 2)
+
+            # 多角形の線も描画
+            for i in range(len(vertices)):
+                pt1 = tuple(vertices[i])
+                pt2 = tuple(vertices[(i+1) % len(vertices)])
+                cv2.line(debug_vertices_image, pt1, pt2, (255, 255, 255, 128), 2)
 
         except Exception as e:
             print("Error in combine_base:", e)
