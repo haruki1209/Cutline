@@ -262,14 +262,14 @@ class ImageProcessingApp:
             # トリミング
             x, y, w, h = cv2.boundingRect(main)
             crop = img_bgr[y:y+h, x:x+w]
-            
-            # 二値マスクを保存
+
+            # 二値マスク(トリミング後)
             binm_crop = self.get_binary_mask(crop)
-            
-            # キャラクター画像を準備
+
+            # キャラクター画像を準備 (RGBA)
             cropped = Image.fromarray(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)).convert("RGBA")
 
-            # 足元ライン
+            # 足元ライン関連
             y_max = max(pt[0][1] for pt in main)
             delta = 5
             feet_pts = [pt[0] for pt in main if pt[0][1] >= y_max - delta]
@@ -278,8 +278,7 @@ class ImageProcessingApp:
             x_left = min(p[0] for p in feet_pts) - x
             x_right = max(p[0] for p in feet_pts) - x
             y_feet = y_max - y
-            cl = x_left
-            
+
             # 台座準備
             key = self.base_var.get()
             fn = self.base_parts.get(key, "")
@@ -291,158 +290,122 @@ class ImageProcessingApp:
                 pedestal = Image.new("RGBA", sz, (128, 128, 128, 255))
             pw, ph = pedestal.size
 
-            # キャンバス
+            # キャンバス作成 (台座分だけ縦に長くする)
             cw, ch = cropped.size
             W, H = max(cw, pw), ch + ph
             comp = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+
+            # キャラクターを中央に貼る
             cx = (W - cw) // 2
-            
-            # --- 先に台座位置計算と垂直ガイド線の位置を決める ---
-            px, py = (W - pw) // 2, y_feet  # 台座の位置
-            comp_right_x = px + pw + 65     # 垂直ガイド線のX座標
-            
-            # 垂直ガイド線の終端Y座標を計算
-            x_rel = comp_right_x - cx
-            y_end_rel = y_feet
-            for y_rel in range(y_feet, -1, -1):
-                if 0 <= y_rel < binm_crop.shape[0] and 0 <= x_rel < binm_crop.shape[1] and binm_crop[y_rel, x_rel] == 255:
-                    y_end_rel = y_rel
-                    break
-            
-            # 足元ラインと垂直ガイド線の座標
-            left_foot_x = cx + cl    # 足元ライン左端
-            right_foot_x = comp_right_x  # 垂直ガイド線X座標
-            foot_y = y_feet         # 足元ラインY座標
-            top_y = y_end_rel       # 垂直ガイド線上端Y座標
-            
-            # キャラクター画像をペースト
             comp.paste(cropped, (cx, 0), cropped)
-            
-            # --- ガイド線描画（一旦描画しておく） ---
-            draw = ImageDraw.Draw(comp)
-            
-            # (1) 水平補助線 - 左端から剣ガイドラインまで延長
-            pad = 5
-            # 輪郭線と同じ色に変更（半透明に調整）
-            line_color = (255, 0, 0, 230)  # 透明度を230に上げる（より不透明に）
-            draw.line([(cx+cl-pad, y_feet), (comp_right_x+pad, y_feet)], fill=line_color, width=8)  # 太さを8に増加
-            
-            # (2) 台座を貼り付け
+
+            # 台座をペースト
+            px = (W - pw) // 2
+            py = y_feet  # 足元と連続させる
             comp.paste(pedestal, (px, py), pedestal)
+
+            # --- (A) 補助線の位置を計算 ---
+            # ここを大きく書き換える
+
+            # 1) "30%上" のライン(y_30)を計算
+            #    例：足元ラインから画面上方向に全高 h の 30%ぶん上がった位置
+            #    h はキャラの高さ = ch。 y_feet は足元。0 が頭頂(かもしれない)。
+            #    簡単に「y_feet の 70%」付近にする実装例:
+            y_30 = int(y_feet * 0.7)
+            if y_30 < 0: 
+                y_30 = 0  # 万一マイナスなら補正
+
+            # 2) 30%のラインの間で最も左端と右端の点を見つける
+            #    30%のラインから足元までの間で走査
+            x_left_30 = cw  # 初期値を最大値に
+            x_right_30 = 0  # 初期値を最小値に
             
-            # (3) 垂直補助線描画
-            draw.line([(comp_right_x, y_feet-pad), (comp_right_x, y_end_rel-pad)], fill=line_color, width=8)
-
-            # ガイド線の座標を保存（後で確実に再描画するため）
-            horizontal_guide = [(cx+cl-pad, foot_y), (comp_right_x+pad, foot_y)]
-            vertical_guide = [(comp_right_x, foot_y-pad), (comp_right_x, top_y-pad)]
-
-            # 画像をNumPy配列に変換して処理
-            comp_np = np.array(comp)
-            h_img, w_img = comp_np.shape[:2]
+            # 30%のラインから足元までの間で走査
+            for y in range(y_30, y_feet + 1):
+                # 各行で白いピクセルを探す
+                for x in range(cw):
+                    if binm_crop[y, x] == 255:
+                        x_left_30 = min(x_left_30, x)
+                        x_right_30 = max(x_right_30, x)
             
-            # 頂点を調整
-            # 1. 上部頂点を左頂点に伸ばす
-            top_vertex = (left_foot_x + 80, max(0, top_y - 100))
-            # 2. 右上頂点をもう少しだけ外側に広げる
-            right_top_vertex = (right_foot_x - 70, max(0, top_y - 150))
-            # 3. 右中間頂点をガイド線に交わらせる
-            mid_right_vertex = (right_foot_x, top_y - 10)
-            # 4. 左下頂点を水平線と補助線の交わる点に配置
-            left_bottom_vertex = (right_foot_x, foot_y)
-            # 5. 左肩頂点を足元ラインの位置に移動
-            left_shoulder_vertex = (left_foot_x, foot_y)  # 足元ラインの左端に配置
+            # 見つからなかった場合は足元ラインの左右を流用
+            if x_left_30 == cw:
+                x_left_30 = x_left
+            if x_right_30 == 0:
+                x_right_30 = x_right
 
-            # 8頂点で構成（尖りを減らして滑らかに）
-            vertices = np.array([
-                top_vertex,
-                right_top_vertex,
-                mid_right_vertex,
-                left_bottom_vertex,
-                left_shoulder_vertex
-            ], dtype=np.int32)
-
-            # OpenCVを使って多角形を描画（マスク生成）
-            polygon_mask = np.zeros((h_img, w_img), dtype=np.uint8)
-            cv2.fillPoly(polygon_mask, [vertices], 255)
-            inside_area = polygon_mask > 0
-
-            # デバッグ出力
-            #print(f"五角形の頂点: {vertices}")
-            #print(f"五角形の面積: {np.sum(inside_area)} ピクセル")
-
-            # デバッグ画像を作成
-            #debug_image = comp_np.copy()
-            #debug_overlay = np.zeros_like(debug_image)
-            #debug_overlay[..., 2] = 255  # 青色
-            #debug_overlay[..., 3] = 80   # 半透明
-            #debug_image[inside_area] = debug_overlay[inside_area]
-            #debug_result = Image.fromarray(debug_image)
-            #debug_result.save("debug_pentagon_area.png")
-
-            # 内側領域の座標範囲を出力
-            #print(f"内側領域の範囲: 上部={top_y}, 下部={foot_y}, 左={left_foot_x}, 右={right_foot_x}")
-            #print(f"内側領域のピクセル数: {np.sum(inside_area)}")
-
-            # 赤線検出条件を元に戻す
-            red_mask = np.zeros((h_img, w_img), dtype=bool)
-            red_mask[(comp_np[:,:,0] > 120) & (comp_np[:,:,1] < 120) & (comp_np[:,:,2] < 120) & (comp_np[:,:,3] > 50)] = True
-
-            # 削除マスクを元に戻す - 内側領域の赤線のみ削除
-            remove_mask = inside_area & red_mask
-
-            # 赤線除去 - 検出された全ての赤線を透明化
-            comp_np[remove_mask, 3] = 0
-            
-            # 重要: 透明化後にガイド線を再描画
-            result_image = Image.fromarray(comp_np)
-            draw = ImageDraw.Draw(result_image)
-            line_color = (255, 0, 0, 230)
-            draw.line(horizontal_guide, fill=line_color, width=8)
-            draw.line(vertical_guide, fill=line_color, width=8)
-
-            # 結果を反映
-            comp_np = np.array(result_image)
-            
-            # 更新表示
-            result = Image.fromarray(comp_np)
-            self.update_image_display(result)
-
-            # 頂点を可視化するための処理を追加
-            debug_vertices_image = comp_np.copy()
-
-            # 各頂点に異なる色を付ける
-            colors = [
-                (255, 0, 0, 255),   # 赤 - 上部頂点
-                (0, 255, 0, 255),   # 緑 - 右上頂点
-                (0, 0, 255, 255),   # 青 - 右中間頂点
-                (255, 255, 0, 255), # 黄 - 右下頂点
-                (255, 0, 255, 255), # マゼンタ - 左下頂点
-                (0, 255, 255, 255), # シアン - 左上頂点
-                (128, 0, 128, 255), # 紫 - 左中間頂点
-                (255, 128, 0, 255)  # オレンジ - 左肩頂点
+            # 3) 実際に引きたい補助線を定義
+            #  (a) 台座の一番上の水平線
+            pedestal_top_y = y_feet  # 台座の一番上（キャラクターに近い方）のy座標
+            horizontal_guide_pedestal = [
+                (cx + x_left_30,  pedestal_top_y),
+                (cx + x_right_30, pedestal_top_y)
+            ]
+            #  (b) 左側垂直ライン
+            vertical_left = [
+                (cx + x_left_30,  y_30),
+                (cx + x_left_30,  y_feet)
+            ]
+            #  (c) 右側垂直ライン
+            vertical_right = [
+                (cx + x_right_30, y_30),
+                (cx + x_right_30, y_feet)
             ]
 
-            # 各頂点に円と番号を描画
-            for i, (point, color) in enumerate(zip(vertices, colors)):
-                x, y = point
-                # 大きめの円を描画
-                cv2.circle(debug_vertices_image, (x, y), 10, color, -1)
-                # 周りに白い縁取り
-                cv2.circle(debug_vertices_image, (x, y), 12, (255, 255, 255, 255), 2)
-                # 頂点番号を表示
-                cv2.putText(debug_vertices_image, str(i+1), (x-5, y+5), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255, 255), 2)
+            # 衝突点(交点)などを取得したい場合は、上の座標をそのまま使えばOK
+            #   例: 30%ライン左端＆足元ラインの交点 => (cx + x_left_30, y_feet) など
 
-            # 多角形の線も描画
-            for i in range(len(vertices)):
-                pt1 = tuple(vertices[i])
-                pt2 = tuple(vertices[(i+1) % len(vertices)])
-                cv2.line(debug_vertices_image, pt1, pt2, (255, 255, 255, 128), 2)
+            # --- (B) 補助線を描画 ---
+            draw = ImageDraw.Draw(comp)
+            line_color = (0, 0, 255, 230)  # 青色に変更
+            lw = 8  # 太さ
+
+            # 台座の水平線と垂直2本
+            draw.line(horizontal_guide_pedestal, fill=line_color, width=lw)
+            draw.line(vertical_left,  fill=line_color, width=lw)
+            draw.line(vertical_right, fill=line_color, width=lw)
+
+            # --- (C) 最終的に外周輪郭だけを残す処理 ---
+            final_np = np.array(comp)  # RGBA配列に変換
+            H2, W2 = final_np.shape[:2]
+
+            # 青線マスクを作成
+            blue_mask = np.zeros((H2, W2), dtype=np.uint8)
+            condition = (
+                (final_np[:, :, 0] < 120) &  # R < 120
+                (final_np[:, :, 1] < 120) &  # G < 120
+                (final_np[:, :, 2] > 120) &  # B > 120
+                (final_np[:, :, 3] > 50)     # A > 50
+            )
+            blue_mask[condition] = 255
+
+            # 輪郭を抽出 -> 最大輪郭のみ残す
+            contours, _ = cv2.findContours(blue_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+            if contours:
+                outer_contour = max(contours, key=cv2.contourArea)
+                outer_mask = np.zeros((H2, W2), dtype=np.uint8)
+                cv2.drawContours(outer_mask, [outer_contour], -1, 255, thickness=cv2.FILLED)
+
+                remove_mask = ((blue_mask == 255) & (outer_mask == 0))
+                final_np[remove_mask, 3] = 0  # 不要な青線を透明化
+
+            # (D) ガイド線が消えてしまった場合に再描画
+            temp_image = Image.fromarray(final_np)
+            draw = ImageDraw.Draw(temp_image)
+
+            draw.line(horizontal_guide_pedestal, fill=line_color, width=lw)
+            draw.line(vertical_left,  fill=line_color, width=lw)
+            draw.line(vertical_right, fill=line_color, width=lw)
+
+            # (E) 表示更新
+            result_np = np.array(temp_image)
+            result_pil = Image.fromarray(result_np)
+            self.update_image_display(result_pil)
 
         except Exception as e:
             print("Error in combine_base:", e)
             traceback.print_exc()
+
 
 def main():
     root = TkinterDnD.Tk()
