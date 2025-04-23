@@ -224,19 +224,25 @@ class ImageProcessingApp:
         if np.mean(mask)>127:
             mask = cv2.bitwise_not(mask)
         return mask
-
+    
     def create_outline(self):
         try:
+            # 1. 元画像取得＆二値マスク
             img_bgr = cv2.cvtColor(np.array(self.current_image), cv2.COLOR_RGB2BGR)
             binm = self.get_binary_mask(img_bgr)
-            k1 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE,(2*self.gap+1,2*self.gap+1))
-            k2 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE,(2*(self.gap+self.thickness)+1,2*(self.gap+self.thickness)+1))
-            ring = cv2.subtract(cv2.dilate(binm,k2), cv2.dilate(binm,k1))
+
+            # 2. モルフォロジーでリング状の輪郭抽出 (シンプルに輪郭だけ)
+            k1 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2*self.gap+1, 2*self.gap+1))
+            k2 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2*(self.gap+self.thickness)+1, 2*(self.gap+self.thickness)+1))
+            ring = cv2.subtract(cv2.dilate(binm, k2), cv2.dilate(binm, k1))
+            
+            # 3. 赤色で輪郭線を描画
             res = img_bgr.copy()
-            res[ring==255] = (0,0,255)
-            pil = Image.fromarray(cv2.cvtColor(res,cv2.COLOR_BGR2RGB))
+            res[ring == 255] = (0, 0, 255)
+            pil = Image.fromarray(cv2.cvtColor(res, cv2.COLOR_BGR2RGB))
             self.outlined_image = pil
             self.update_image_display(pil)
+
         except Exception as e:
             print("Error in create_outline:", e)
             traceback.print_exc()
@@ -253,10 +259,14 @@ class ImageProcessingApp:
             cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             main = max(cnts, key=cv2.contourArea)
 
-
             # トリミング
             x, y, w, h = cv2.boundingRect(main)
             crop = img_bgr[y:y+h, x:x+w]
+            
+            # 二値マスクを保存
+            binm_crop = self.get_binary_mask(crop)
+            
+            # キャラクター画像を準備
             cropped = Image.fromarray(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)).convert("RGBA")
 
             # 足元ライン
@@ -268,9 +278,8 @@ class ImageProcessingApp:
             x_left = min(p[0] for p in feet_pts) - x
             x_right = max(p[0] for p in feet_pts) - x
             y_feet = y_max - y
-            cl, cr = x_left, w
-
-
+            cl = x_left
+            
             # 台座準備
             key = self.base_var.get()
             fn = self.base_parts.get(key, "")
@@ -281,88 +290,146 @@ class ImageProcessingApp:
             else:
                 pedestal = Image.new("RGBA", sz, (128, 128, 128, 255))
             pw, ph = pedestal.size
-            binm_crop = self.get_binary_mask(crop)
 
             # キャンバス
             cw, ch = cropped.size
             W, H = max(cw, pw), ch + ph
             comp = Image.new("RGBA", (W, H), (0, 0, 0, 0))
             cx = (W - cw) // 2
-            comp.paste(cropped, (cx, 0), cropped)
-
-
-            # 赤ガイド線描画
-            draw = ImageDraw.Draw(comp)
-            draw.line([(cx+cl, y_feet), (cx+cr, y_feet)], fill=(255,0,0,255), width=2)
-            px, py = (W-pw)//2, y_feet
-            comp.paste(pedestal, (px, py), pedestal)
-            comp_right_x = px + pw + 65
+            
+            # --- 先に台座位置計算と垂直ガイド線の位置を決める ---
+            px, py = (W - pw) // 2, y_feet  # 台座の位置
+            comp_right_x = px + pw + 65     # 垂直ガイド線のX座標
+            
+            # 垂直ガイド線の終端Y座標を計算
             x_rel = comp_right_x - cx
             y_end_rel = y_feet
             for y_rel in range(y_feet, -1, -1):
                 if 0 <= y_rel < binm_crop.shape[0] and 0 <= x_rel < binm_crop.shape[1] and binm_crop[y_rel, x_rel] == 255:
                     y_end_rel = y_rel
                     break
-            draw.line([(comp_right_x, y_feet), (comp_right_x, y_end_rel)], fill=(255,0,0,255), width=2)
+            
+            # 足元ラインと垂直ガイド線の座標
+            left_foot_x = cx + cl    # 足元ライン左端
+            right_foot_x = comp_right_x  # 垂直ガイド線X座標
+            foot_y = y_feet         # 足元ラインY座標
+            top_y = y_end_rel       # 垂直ガイド線上端Y座標
+            
+            # キャラクター画像をペースト
+            comp.paste(cropped, (cx, 0), cropped)
+            
+            # --- ガイド線描画（一旦描画しておく） ---
+            draw = ImageDraw.Draw(comp)
+            
+            # (1) 水平補助線 - 左端から剣ガイドラインまで延長
+            pad = 5
+            # 輪郭線と同じ色に変更（半透明に調整）
+            line_color = (255, 0, 0, 230)  # 透明度を230に上げる（より不透明に）
+            draw.line([(cx+cl-pad, y_feet), (comp_right_x+pad, y_feet)], fill=line_color, width=8)  # 太さを8に増加
+            
+            # (2) 台座を貼り付け
+            comp.paste(pedestal, (px, py), pedestal)
+            
+            # (3) 垂直補助線描画
+            draw.line([(comp_right_x, y_feet-pad), (comp_right_x, y_end_rel-pad)], fill=line_color, width=8)
 
+            # ガイド線の座標を保存（後で確実に再描画するため）
+            horizontal_guide = [(cx+cl-pad, foot_y), (comp_right_x+pad, foot_y)]
+            vertical_guide = [(comp_right_x, foot_y-pad), (comp_right_x, top_y-pad)]
 
-            # --- 新規: 赤ガイド線から太もも・剣内側・足元内側だけ緑ハイライト ---
+            # 画像をNumPy配列に変換して処理
             comp_np = np.array(comp)
-            H_img, W_img = comp_np.shape[:2]
-            R, G, Bc, A = cv2.split(comp_np)
-            red_mask = (R>200)&(G<50)&(Bc<50)&(A>0)
+            h_img, w_img = comp_np.shape[:2]
+            
+            # 頂点を滑らかに調整し、より広範囲に内側領域を定義
+            # 1. 上部頂点の位置を調整
+            top_vertex = (right_foot_x - 40, max(0, top_y - 100))  # より左に移動し、上に伸ばす
+            # 2. 右側をなめらかなカーブに
+            right_top_vertex = (right_foot_x - 100, max(0, top_y - 40))  # 尖りを無くすよう調整
+            # 3. 右下頂点
+            right_bottom_vertex = (right_foot_x - 120, foot_y + 5)  # さらに左に
+            # 4. 左下頂点
+            left_bottom_vertex = (left_foot_x + 20, foot_y + 5)
+            # 5. 左上頂点（太ももライン上まで）
+            left_top_vertex = (left_foot_x + 30, top_y + 30)  # 右上に調整
+            # 6. 左上の肩頂点（鞘まで覆うよう広げる）
+            left_shoulder_vertex = (left_foot_x + 35, max(0, top_y - 80))  # 上に伸ばして鞘も覆う
 
-            # キャラ内部マスク
-            crop_bool = binm_crop.astype(bool)
-            mask_full = np.zeros((H_img, W_img), bool)
-            mask_full[0:ch, cx:cx+cw] = crop_bool
-            mask_full[y_feet+1:, :] = False
+            # さらに両側に3つの制御点を追加して、8角形にして滑らかさを増す
+            mid_right_vertex = (right_foot_x - 115, top_y - 10)  # 右側中間部
+            mid_left_vertex = (left_foot_x + 30, top_y - 40)  # 左側中間部
 
+            # 8頂点で構成（尖りを減らして滑らかに）
+            vertices = np.array([
+                top_vertex,
+                right_top_vertex,
+                mid_right_vertex,
+                right_bottom_vertex,
+                left_bottom_vertex,
+                left_top_vertex,
+                mid_left_vertex,
+                left_shoulder_vertex
+            ], dtype=np.int32)
 
-            # 1) 太ももマスク
-            tx0 = cx + int(cw*0.25)
-            tx1 = cx + int(cw*0.6)
-            ty0 = int(ch*0.4)
-            ty1 = int(ch*0.75)
-            thigh_roi = np.zeros((H_img, W_img), bool)
-            thigh_roi[ty0:ty1, tx0:tx1] = True
-            thigh_mask = red_mask & thigh_roi & mask_full
+            # OpenCVを使って多角形を描画（マスク生成）
+            polygon_mask = np.zeros((h_img, w_img), dtype=np.uint8)
+            cv2.fillPoly(polygon_mask, [vertices], 255)
+            inside_area = polygon_mask > 0
 
-            # 2) 剣内側マスク（矩形ROI：補助線の手前まで）
-            sx0 = cx + int(cw * 0.5)
-            sx1 = comp_right_x - 1
-            sy0 = 0
-            sy1 = ch
-            sword_roi = np.zeros((H_img, W_img), bool)
-            sword_roi[sy0:sy1, sx0:sx1] = True
-            sword_mask = red_mask & mask_full & sword_roi
+            # デバッグ出力
+            print(f"五角形の頂点: {vertices}")
+            print(f"五角形の面積: {np.sum(inside_area)} ピクセル")
 
-                        # 3) 足元内側マスク（水平線より上、左足ラインの右側）
-            fx = cx + cl
-            # ROI：足元水平線の上側かつ左足ラインの右側（体本体側）
-            foot_roi = np.zeros((H_img, W_img), bool)
-            # y<y_feet, x>=fx, x<=cx+cw//2 までを範囲として指定
-            center_x = cx + cw // 2
-            foot_roi[0:y_feet, fx:center_x] = True
-            foot_mask = red_mask & mask_full & foot_roi
+            # デバッグ画像を作成
+            debug_image = comp_np.copy()
+            debug_overlay = np.zeros_like(debug_image)
+            debug_overlay[..., 2] = 255  # 青色
+            debug_overlay[..., 3] = 80   # 半透明
+            debug_image[inside_area] = debug_overlay[inside_area]
+            debug_result = Image.fromarray(debug_image)
+            debug_result.save("debug_pentagon_area.png")
 
-            # 緑オーバーレイ適用
-            overlay = np.zeros_like(comp_np)
-            overlay[...,1] = 255
-            overlay[...,3] = 150
-            mask_green = thigh_mask | sword_mask | foot_mask
-            comp_np[mask_green] = overlay[mask_green]
+            # 内側領域の座標範囲を出力
+            print(f"内側領域の範囲: 上部={top_y}, 下部={foot_y}, 左={left_foot_x}, 右={right_foot_x}")
+            print(f"内側領域のピクセル数: {np.sum(inside_area)}")
 
+            # 赤線検出条件を元に戻す
+            red_mask = np.zeros((h_img, w_img), dtype=bool)
+            red_mask[(comp_np[:,:,0] > 120) & (comp_np[:,:,1] < 120) & (comp_np[:,:,2] < 120) & (comp_np[:,:,3] > 50)] = True
+
+            # 削除マスクを元に戻す - 内側領域の赤線のみ削除
+            remove_mask = inside_area & red_mask
+
+            # デバッグ用の赤線範囲可視化部分は残す
+            debug_red_image = comp_np.copy()
+            debug_red_overlay = np.zeros_like(debug_red_image)
+            debug_red_overlay[..., 0] = 255  # 赤色
+            debug_red_overlay[..., 3] = 80   # 半透明
+            debug_red_image[remove_mask] = debug_red_overlay[remove_mask]
+            debug_red_result = Image.fromarray(debug_red_image)
+            debug_red_result.save("debug_red_lines.png")
+            print("赤線検出領域を保存しました: debug_red_lines.png")
+
+            # 赤線除去 - 検出された全ての赤線を透明化
+            comp_np[remove_mask, 3] = 0
+            
+            # 重要: 透明化後にガイド線を再描画
+            result_image = Image.fromarray(comp_np)
+            draw = ImageDraw.Draw(result_image)
+            line_color = (255, 0, 0, 230)
+            draw.line(horizontal_guide, fill=line_color, width=8)
+            draw.line(vertical_guide, fill=line_color, width=8)
+
+            # 結果を反映
+            comp_np = np.array(result_image)
+            
             # 更新表示
             result = Image.fromarray(comp_np)
             self.update_image_display(result)
 
-
         except Exception as e:
             print("Error in combine_base:", e)
             traceback.print_exc()
-            result = Image.fromarray(comp_np)
-            self.update_image_display(result)
 
 def main():
     root = TkinterDnD.Tk()
