@@ -350,7 +350,7 @@ class ImageProcessingApp:
             ff_mask = np.zeros((h_img + 2, w_img + 2), np.uint8)
             flood = closed.copy()
             cv2.floodFill(flood, ff_mask, (0, 0), 255)
-            silhouette = cv2.bitwise_not(flood)       # ="穴埋め済み"物体領域
+            silhouette = cv2.bitwise_not(flood)
             
             # ―― 3) 最外周輪郭だけ取得
             contours, _ = cv2.findContours(
@@ -391,12 +391,6 @@ class ImageProcessingApp:
             
             # 削除マスク（赤線かつ内側領域かつ外周でなくガイド線でない）
             remove_mask = red_mask & inside_area & ~edge_protect & ~guide_mask
-            
-            # デバッグ用
-            debug_mask = np.zeros((h_img, w_img, 3), dtype=np.uint8)
-            debug_mask[guide_mask] = [0, 255, 0]  # ガイド線保護領域は緑
-            debug_mask[remove_mask] = [0, 0, 255]  # 削除対象は青
-            Image.fromarray(debug_mask).save("debug_masks.png")
             
             # 削除実行
             comp_np[remove_mask, 3] = 0
