@@ -1,1 +1,2 @@
 # Cutline
+.\venv\Scripts\activate
