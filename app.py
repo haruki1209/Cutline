@@ -342,55 +342,54 @@ class ImageProcessingApp:
             character_mask = np.zeros((h_img, w_img), dtype=np.uint8)
             character_mask[comp_np[:,:,3] > 100] = 255
             
-            # ―― 1) 隙間を塞いでシルエット化
-            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-            closed = cv2.morphologyEx(character_mask, cv2.MORPH_CLOSE, kernel, iterations=2)
-            
-            # ―― 2) Flood‑Fill で穴を埋める
-            ff_mask = np.zeros((h_img + 2, w_img + 2), np.uint8)
-            flood = closed.copy()
-            cv2.floodFill(flood, ff_mask, (0, 0), 255)
-            silhouette = cv2.bitwise_not(flood)
-            
-            # ―― 3) 最外周輪郭だけ取得
-            contours, _ = cv2.findContours(
-                silhouette, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE
-            )
-            
-            # ―― 4) 外周を描く → edge_maskに保存
-            edge_mask = np.zeros_like(character_mask)
-            cv2.drawContours(edge_mask, contours, -1, 255, thickness=3)  # 少し太くして確実に保護
-            
             # ガイド線を保護するマスク
             guide_mask = np.zeros((h_img, w_img), dtype=bool)
-            
+
             # ガイド線の水平部分
             for y in range(max(0, foot_y-line_width), min(h_img, foot_y+line_width)):
                 for x in range(max(0, left_foot_x-pad), min(w_img, right_foot_x+pad)):
                     guide_mask[y, x] = True
-            
+
             # ガイド線の垂直部分
             for y in range(max(0, top_y-pad), min(h_img, foot_y+line_width)):
                 for x in range(max(0, right_foot_x-line_width), min(w_img, right_foot_x+line_width)):
                     guide_mask[y, x] = True
             
-            # 内側領域定義（シンプルに）
-            inside_area = np.zeros((h_img, w_img), dtype=bool)
-            margin = 15
-            for y in range(h_img):
-                for x in range(w_img):
-                    if y < foot_y - margin and x < right_foot_x - margin:
-                        inside_area[y, x] = True
-            
+            # 内側領域定義（キャラクターマスクから輪郭取得）
+            silhouette_uint8 = (character_mask * 255).astype(np.uint8)
+            cnts, _ = cv2.findContours(
+                silhouette_uint8,
+                cv2.RETR_EXTERNAL,
+                cv2.CHAIN_APPROX_SIMPLE
+            )
+            main_contour = max(cnts, key=cv2.contourArea)
+
+            # 外周を除いた内側領域を作成
+            edge_mask = np.zeros_like(silhouette_uint8)
+            inside_mask = np.zeros_like(silhouette_uint8)
+
+            # 輪郭線だけ描画（太めに）
+            cv2.drawContours(edge_mask, [main_contour], -1, 255, thickness=12)
+            # 内側を塗りつぶし
+            cv2.drawContours(inside_mask, [main_contour], -1, 255, thickness=cv2.FILLED)
+
+            # 内側から輪郭を引く = 純粋な内側領域
+            pure_inside = inside_mask.copy()
+            pure_inside[edge_mask > 0] = 0
+            inside_area = inside_mask.astype(bool)
+            edge_protect = edge_mask > 0
+
             # 赤線検出
             red_mask = np.zeros((h_img, w_img), dtype=bool)
-            red_mask[(comp_np[:,:,0] > 230) & (comp_np[:,:,1] < 50) & (comp_np[:,:,2] < 50) & (comp_np[:,:,3] > 200)] = True
+            red_mask[
+              (comp_np[:,:,0] > 200)
+            & (comp_np[:,:,1] < 10)
+            & (comp_np[:,:,2] < 10)
+            & (comp_np[:,:,3] > 100)
+            ] = True
             
-            # 外周輪郭をマスクとして保護
-            edge_protect = edge_mask > 0
-            
-            # 削除マスク（赤線かつ内側領域かつ外周でなくガイド線でない）
-            remove_mask = red_mask & inside_area & ~edge_protect & ~guide_mask
+            # 削除マスク（赤線かつ純粋な内側領域内かつガイド線でない）
+            remove_mask = red_mask & (pure_inside > 0) & ~guide_mask
             
             # 削除実行
             comp_np[remove_mask, 3] = 0
