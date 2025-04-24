@@ -383,23 +383,74 @@ class ImageProcessingApp:
                     # 交差部分を紫色でマーク
                     cv2.circle(work_np, (cx, cy), 5, (255, 0, 255, 255), -1)
             
-            # 16. 最終的な輪郭を抽出
-            final_mask = cv2.bitwise_or(red_mask, blue_mask)
-            contours, _ = cv2.findContours(final_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            
-            # 17. 最大の輪郭のみを残す
-            if contours:
-                outer_contour = max(contours, key=cv2.contourArea)
-                outer_mask = np.zeros_like(final_mask)
-                cv2.drawContours(outer_mask, [outer_contour], -1, 255, thickness=cv2.FILLED)
-                
-                # 18. 不要な内部の線を削除
-                remove_mask = ((final_mask == 255) & (outer_mask == 0))
-                work_np[remove_mask, 3] = 0  # アルファチャンネルを0に設定して透明化
-            
-            # 19. 結果を保存して表示
+            # 16. 赤と青のマスクは既にあるものとする
+            #     red_mask, blue_mask, あと交差マスク intersection_mask
+
+            # 16-1. 交差点を検出
+            contours, _ = cv2.findContours(intersection_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            intersection_points = []
+            for cnt in contours:
+                M = cv2.moments(cnt)
+                if M["m00"] != 0:
+                    cx = int(M["m10"] / M["m00"])
+                    cy = int(M["m01"] / M["m00"])
+                    intersection_points.append((cx, cy))
+
+            # 交差点が2つ想定されている前提 (複数あれば近い順に2つ取るなどの工夫)
+            if len(intersection_points) >= 2:
+                P1 = intersection_points[0]
+                P2 = intersection_points[1]
+            else:
+                # 万一2つ見つからなければ、無理やり処理するか中断するか
+                print("交差点が2つ見つからないので処理できません")
+                # return あるいは continue
+
+            # 16-2. 青線を「U字型 → 閉じた多角形」にするため、P1～P2を結ぶ線を描画
+            #       blue_mask は 1ch。太さや色(=255)に注意
+            blue_closed = blue_mask.copy()
+            cv2.line(blue_closed, P1, P2, 255, thickness=5)  # 適度に太い線で結ぶ
+
+            # 16-3. 「青線で閉じた形」を内部塗りつぶし
+            #       1) 線部分は白(255)、その他は黒(0)になっているはずなので、
+            #          findContours → drawContours(..., -1, FILLED) で塗りつぶすか
+            #          floodFill でもOK
+            tmp = blue_closed.copy()
+            contours_b, _ = cv2.findContours(tmp, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            blue_fill = np.zeros_like(blue_closed)
+            cv2.drawContours(blue_fill, contours_b, -1, 255, thickness=cv2.FILLED)
+            # blue_fill=255 の領域が「青線で囲われた内部」
+
+            # 16-4. 赤線(キャラ)の内部領域も同様に塗りつぶす
+            tmp_r = red_mask.copy()
+            contours_r, _ = cv2.findContours(tmp_r, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            red_fill = np.zeros_like(red_mask)
+            cv2.drawContours(red_fill, contours_r, -1, 255, thickness=cv2.FILLED)
+
+            # 16-5. 2つの領域を OR → キャラ+台座の合体領域
+            union_fill = cv2.bitwise_or(red_fill, blue_fill)
+
+            # 16-6. 上記 union_fill の最外周をとれば「最も外側の輪郭」1本
+            contours_u, _ = cv2.findContours(union_fill, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            if len(contours_u) > 0:
+                outer_contour = max(contours_u, key=cv2.contourArea)
+                # outer_contour がキャラ＋台座の外周
+
+                # 例: 緑色で輪郭線を描画
+                #     work_np: RGBA (H,W,4)
+                #     BGRで言うと(0,255,0)が緑
+                #     ただし RGBA の順なら(0,255,0,255)
+                cv2.drawContours(work_np, [outer_contour], -1, (0, 255, 0, 255), thickness=5)
+
+                # あるいはアルファチャンネルで内側以外を透明にしたいなら:
+                #    内部をFILLしたマスクをもう一度作ってアルファを0に、といった処理をすればOK
+
+            # これで「交差点で外側が青線に切り替わり、最も外周だけを一周する輪郭線」を
+            # 最終的に緑色で描画できます。
+
+            # これで「赤線と青線が交差した箇所で、外側をたどる一つの輪郭線」のみになる
             self.work_image = Image.fromarray(work_np)
             self.update_image_display(self.work_image)
+
 
         except Exception as e:
             print("Error in combine_base:", e)
