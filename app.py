@@ -297,16 +297,16 @@ class ImageProcessingApp:
 
             # 8. 補助線の位置を計算
             # "30%上" のライン(y_30)を計算
-            y_30 = int(y_feet * 0.7)
-            if y_30 < 0: 
-                y_30 = 0  # 万一マイナスなら補正
+            y_25 = int(y_feet * 0.7)
+            if y_25 < 0: 
+                y_25 = 0  # 万一マイナスなら補正
 
             # 30%のラインの間で最も左端と右端の点を見つける
             x_left_30 = cw  # 初期値を最大値に
             x_right_30 = 0  # 初期値を最小値に
             
             # 30%のラインから足元までの間で走査
-            for y_pos in range(y_30 - y, y_feet - y + 1):
+            for y_pos in range(y_25 - y, y_feet - y + 1):
                 # 各行で白いピクセルを探す
                 for x_pos in range(cw):
                     if binm_crop[y_pos, x_pos] == 255:
@@ -327,12 +327,12 @@ class ImageProcessingApp:
             ]
             # 左側垂直ライン
             vertical_left = [
-                (x_left_30 + x, y_30),
+                (x_left_30 + x, y_25),
                 (x_left_30 + x, y_feet)
             ]
             # 右側垂直ライン
             vertical_right = [
-                (x_right_30 + x, y_30),
+                (x_right_30 + x, y_25),
                 (x_right_30 + x, y_feet)
             ]
 
@@ -347,11 +347,20 @@ class ImageProcessingApp:
                 (work_np[:, :, 2] < 50)     # B < 50
             )
             red_mask[red_condition] = 255
+
+                    # ──────────── ここからが追加部分 ────────────
+            # 3. 赤線だけを消す（元画像のピクセルで上書き）
+            orig_np = np.array(self.current_image.convert("RGBA"))
+            # 赤線マスクが立っている場所だけ、元画像のRGBAをコピー
+            work_np[red_mask == 255] = orig_np[red_mask == 255]
+            # 再び PIL Image に戻して self.work_image をリセット
+            self.work_image = Image.fromarray(work_np)
+            # ──────────── ここまでが追加部分 ────────────
             
             # 11. 青線を描画
             draw = ImageDraw.Draw(self.work_image)
             line_color = (0, 0, 255, 255)  # 青色
-            lw = 8  # 線の太さ
+            lw = 3  # 線の太さ
             
             # 台座の水平線と垂直2本を描画
             draw.line(horizontal_guide_pedestal, fill=line_color, width=lw)
@@ -375,12 +384,12 @@ class ImageProcessingApp:
             
             # 15. 交差部分を紫色でマーク
             for cnt in contours:
-                # 交差部分の中心を計算
+                 #交差部分の中心を計算
                 M = cv2.moments(cnt)
                 if M["m00"] != 0:
                     cx = int(M["m10"] / M["m00"])
                     cy = int(M["m01"] / M["m00"])
-                    # 交差部分を紫色でマーク
+                     #交差部分を紫色でマーク
                     cv2.circle(work_np, (cx, cy), 5, (255, 0, 255, 255), -1)
             
             # 16. 赤と青のマスクは既にあるものとする
@@ -440,6 +449,20 @@ class ImageProcessingApp:
                 #     BGRで言うと(0,255,0)が緑
                 #     ただし RGBA の順なら(0,255,0,255)
                 cv2.drawContours(work_np, [outer_contour], -1, (0, 255, 0, 255), thickness=5)
+
+                # P1（左端の交差点）だけを対象に上向きの緑線を消す
+            lw = 5
+            H, W, _ = work_np.shape
+            # intersection_points は [(x1,y1), (x2,y2)] のはずなので
+            # 左端の要素（P1）だけを取り出す
+            points = sorted(intersection_points, key=lambda p: p[0])
+            x0, y0 = points[0]
+            for yy in range(y_25, y0):
+                for xx in range(x0-lw, x0+lw+1):
+                    if 0 <= xx < W:
+                        b, g, r, a = work_np[yy, xx]
+                        if (b, g, r) == (0, 255, 0):
+                            work_np[yy, xx, 3] = 0
 
                 # あるいはアルファチャンネルで内側以外を透明にしたいなら:
                 #    内部をFILLしたマスクをもう一度作ってアルファを0に、といった処理をすればOK
