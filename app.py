@@ -15,6 +15,7 @@ class ImageProcessingApp:
 
         # 画像保持用
         self.current_image = None
+        self.work_image = None  # 作業用画像（RGBA）
         self.outlined_image = None
         self.current_display_image = None
         self.zoom_factor = 1.0
@@ -189,6 +190,8 @@ class ImageProcessingApp:
         try:
             img = Image.open(fp)
             self.current_image = img
+            # work_imageを初期化（RGBA形式）
+            self.work_image = img.convert("RGBA")
             self.update_image_display(img)
             self.outline_btn.configure(state="normal")
             self.combine_btn.configure(state="normal")
@@ -231,20 +234,19 @@ class ImageProcessingApp:
             img_bgr = cv2.cvtColor(np.array(self.current_image), cv2.COLOR_RGB2BGR)
             binm = self.get_binary_mask(img_bgr)
 
-            # 2. モルフォロジーでリング状の輪郭抽出 (シンプルに輪郭だけ)
+            # 2. モルフォロジーでリング状の輪郭抽出
             k1 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2*self.gap+1, 2*self.gap+1))
             k2 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2*(self.gap+self.thickness)+1, 2*(self.gap+self.thickness)+1))
             ring = cv2.subtract(cv2.dilate(binm, k2), cv2.dilate(binm, k1))
             
-            # 3. 赤色で輪郭線を描画（太くする）
-            res = img_bgr.copy()
-            # カーネルサイズを大きくして膨張処理
-            kernel = np.ones((3, 3), np.uint8)
-            thick_ring = cv2.dilate(ring, kernel, iterations=2)
-            res[thick_ring == 255] = (0, 0, 255)
-            pil = Image.fromarray(cv2.cvtColor(res, cv2.COLOR_BGR2RGB))
-            self.outlined_image = pil
-            self.update_image_display(pil)
+            # 3. work_imageに赤色で輪郭線を描画
+            work_np = np.array(self.work_image)
+            work_bgr = cv2.cvtColor(work_np, cv2.COLOR_RGBA2BGR)
+            work_bgr[ring == 255] = (0, 0, 255)  # 輪郭線部分を赤色に設定
+            self.work_image = Image.fromarray(cv2.cvtColor(work_bgr, cv2.COLOR_BGR2RGBA))
+            
+            # 4. 表示を更新
+            self.update_image_display(self.work_image)
 
         except Exception as e:
             print("Error in create_outline:", e)
@@ -252,34 +254,33 @@ class ImageProcessingApp:
 
     def combine_base(self):
         try:
-            # 元画像処理
-            src = self.outlined_image or self.current_image
-            img = np.array(src.convert("RGB"))
-            img_bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+            # 1. work_imageから処理を開始
+            work_np = np.array(self.work_image)
             
-            # 二値マスク＆輪郭取得
+            # 2. 元画像から輪郭を取得
+            img_bgr = cv2.cvtColor(work_np, cv2.COLOR_RGBA2BGR)
             mask = self.get_binary_mask(img_bgr)
             cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             main = max(cnts, key=cv2.contourArea)
-            
-            # トリミング
+
+            # 3. トリミング
             x, y, w, h = cv2.boundingRect(main)
             crop = img_bgr[y:y+h, x:x+w]
+
+            # 4. 二値マスク(トリミング後)
             binm_crop = self.get_binary_mask(crop)
-            cropped = Image.fromarray(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)).convert("RGBA")
-            
-            # 足元ライン計算
+
+            # 5. 足元ライン関連
             y_max = max(pt[0][1] for pt in main)
             delta = 5
             feet_pts = [pt[0] for pt in main if pt[0][1] >= y_max - delta]
             if not feet_pts:
                 feet_pts = [pt[0] for pt in main]
-            x_left = min(p[0] for p in feet_pts) - x
-            x_right = max(p[0] for p in feet_pts) - x
-            y_feet = y_max - y
-            cl = x_left
-            
-            # 台座準備
+            x_left = min(p[0] for p in feet_pts)
+            x_right = max(p[0] for p in feet_pts)
+            y_feet = y_max
+
+            # 6. 台座準備
             key = self.base_var.get()
             fn = self.base_parts.get(key, "")
             sz = self.base_sizes.get(key, (200, 40))
@@ -289,118 +290,172 @@ class ImageProcessingApp:
             else:
                 pedestal = Image.new("RGBA", sz, (128, 128, 128, 255))
             pw, ph = pedestal.size
-            
-            # 合成画像準備
-            cw, ch = cropped.size
+
+            # 7. キャンバス作成 (台座分だけ縦に長くする)
+            cw, ch = crop.shape[1], crop.shape[0]
             W, H = max(cw, pw), ch + ph
-            comp = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-            cx = (W - cw) // 2
-            px, py = (W - pw) // 2, y_feet
-            comp_right_x = px + pw + 65
-            
-            # 上端位置の計算
-            x_rel = comp_right_x - cx
-            y_end_rel = y_feet
-            for y_rel in range(y_feet, -1, -1):
-                if 0 <= y_rel < binm_crop.shape[0] and 0 <= x_rel < binm_crop.shape[1] and binm_crop[y_rel, x_rel] == 255:
-                    y_end_rel = y_rel
-                    break
-            
-            left_foot_x = cx + cl
-            right_foot_x = comp_right_x
-            foot_y = y_feet
-            top_y = y_end_rel
-            
-            # キャラクター画像をペースト
-            comp.paste(cropped, (cx, 0), cropped)
-            
-            # ガイド線描画
-            draw = ImageDraw.Draw(comp)
-            pad = 15
-            line_color = (255, 0, 0, 255)
-            line_width = 10
-            intersection_point = (comp_right_x, foot_y)
-            
-            # 水平線と垂直線を描画
-            horizontal_guide = [(cx+cl-pad, foot_y), (comp_right_x+pad, foot_y)]
-            draw.line(horizontal_guide, fill=line_color, width=line_width)
-            vertical_guide = [(comp_right_x, foot_y), (comp_right_x, top_y-pad)]
-            draw.line(vertical_guide, fill=line_color, width=line_width)
-            
-            # 交点を補強
-            dot_radius = 5
-            draw.ellipse([
-                (intersection_point[0]-dot_radius, intersection_point[1]-dot_radius),
-                (intersection_point[0]+dot_radius, intersection_point[1]+dot_radius)
-            ], fill=line_color)
-            
-            # NumPy配列に変換して処理
-            comp_np = np.array(comp)
-            h_img, w_img = comp_np.shape[:2]
-            
-            # キャラクターマスクの作成（アルファチャネルベース）
-            character_mask = np.zeros((h_img, w_img), dtype=np.uint8)
-            character_mask[comp_np[:,:,3] > 100] = 255
-            
-            # ガイド線を保護するマスク
-            guide_mask = np.zeros((h_img, w_img), dtype=bool)
 
-            # ガイド線の水平部分
-            for y in range(max(0, foot_y-line_width), min(h_img, foot_y+line_width)):
-                for x in range(max(0, left_foot_x-pad), min(w_img, right_foot_x+pad)):
-                    guide_mask[y, x] = True
+            # 8. 補助線の位置を計算
+            # "30%上" のライン(y_30)を計算
+            y_30 = int(y_feet * 0.7)
+            if y_30 < 0: 
+                y_30 = 0  # 万一マイナスなら補正
 
-            # ガイド線の垂直部分
-            for y in range(max(0, top_y-pad), min(h_img, foot_y+line_width)):
-                for x in range(max(0, right_foot_x-line_width), min(w_img, right_foot_x+line_width)):
-                    guide_mask[y, x] = True
+            # 30%のラインの間で最も左端と右端の点を見つける
+            x_left_30 = cw  # 初期値を最大値に
+            x_right_30 = 0  # 初期値を最小値に
             
-            # 内側領域定義（キャラクターマスクから輪郭取得）
-            silhouette_uint8 = (character_mask * 255).astype(np.uint8)
-            cnts, _ = cv2.findContours(
-                silhouette_uint8,
-                cv2.RETR_EXTERNAL,
-                cv2.CHAIN_APPROX_SIMPLE
+            # 30%のラインから足元までの間で走査
+            for y_pos in range(y_30 - y, y_feet - y + 1):
+                # 各行で白いピクセルを探す
+                for x_pos in range(cw):
+                    if binm_crop[y_pos, x_pos] == 255:
+                        x_left_30 = min(x_left_30, x_pos)
+                        x_right_30 = max(x_right_30, x_pos)
+            
+            # 見つからなかった場合は足元ラインの左右を流用
+            if x_left_30 == cw:
+                x_left_30 = x_left - x
+            if x_right_30 == 0:
+                x_right_30 = x_right - x
+
+            # 9. 補助線の座標を定義（元の画像の座標系に変換）
+            # 台座の一番上の水平線
+            horizontal_guide_pedestal = [
+                (x_left_30 + x, y_feet),
+                (x_right_30 + x, y_feet)
+            ]
+            # 左側垂直ライン
+            vertical_left = [
+                (x_left_30 + x, y_30),
+                (x_left_30 + x, y_feet)
+            ]
+            # 右側垂直ライン
+            vertical_right = [
+                (x_right_30 + x, y_30),
+                (x_right_30 + x, y_feet)
+            ]
+
+            # 10. 赤線と青線のマスクを作成
+            red_mask = np.zeros(work_np.shape[:2], dtype=np.uint8)
+            blue_mask = np.zeros(work_np.shape[:2], dtype=np.uint8)
+            
+            # 赤線の検出 (R>200, G<50, B<50)
+            red_condition = (
+                (work_np[:, :, 0] > 200) &  # R > 200
+                (work_np[:, :, 1] < 50) &   # G < 50
+                (work_np[:, :, 2] < 50)     # B < 50
             )
-            main_contour = max(cnts, key=cv2.contourArea)
-
-            # 外周を除いた内側領域を作成
-            edge_mask = np.zeros_like(silhouette_uint8)
-            inside_mask = np.zeros_like(silhouette_uint8)
-
-            # 輪郭線だけ描画（太めに）
-            cv2.drawContours(edge_mask, [main_contour], -1, 255, thickness=12)
-            # 内側を塗りつぶし
-            cv2.drawContours(inside_mask, [main_contour], -1, 255, thickness=cv2.FILLED)
-
-            # 内側から輪郭を引く = 純粋な内側領域
-            pure_inside = inside_mask.copy()
-            pure_inside[edge_mask > 0] = 0
-            inside_area = inside_mask.astype(bool)
-            edge_protect = edge_mask > 0
-
-            # 赤線検出
-            red_mask = np.zeros((h_img, w_img), dtype=bool)
-            red_mask[
-              (comp_np[:,:,0] > 200)
-            & (comp_np[:,:,1] < 10)
-            & (comp_np[:,:,2] < 10)
-            & (comp_np[:,:,3] > 100)
-            ] = True
+            red_mask[red_condition] = 255
             
-            # 削除マスク（赤線かつ純粋な内側領域内かつガイド線でない）
-            remove_mask = red_mask & (pure_inside > 0) & ~guide_mask
+            # 11. 青線を描画
+            draw = ImageDraw.Draw(self.work_image)
+            line_color = (0, 0, 255, 255)  # 青色
+            lw = 8  # 線の太さ
             
-            # 削除実行
-            comp_np[remove_mask, 3] = 0
+            # 台座の水平線と垂直2本を描画
+            draw.line(horizontal_guide_pedestal, fill=line_color, width=lw)
+            draw.line(vertical_left, fill=line_color, width=lw)
+            draw.line(vertical_right, fill=line_color, width=lw)
             
-            # 結果表示
-            result = Image.fromarray(comp_np)
-            self.update_image_display(result)
+            # 12. 青線のマスクを作成
+            work_np = np.array(self.work_image)
+            blue_condition = (
+                (work_np[:, :, 0] < 50) &   # R < 50
+                (work_np[:, :, 1] < 50) &   # G < 50
+                (work_np[:, :, 2] > 200)    # B > 200
+            )
+            blue_mask[blue_condition] = 255
             
+            # 13. 交差部分を検出
+            intersection_mask = cv2.bitwise_and(red_mask, blue_mask)
+            
+            # 14. 交差部分の輪郭を取得
+            contours, _ = cv2.findContours(intersection_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            
+            # 15. 交差部分を紫色でマーク
+            for cnt in contours:
+                # 交差部分の中心を計算
+                M = cv2.moments(cnt)
+                if M["m00"] != 0:
+                    cx = int(M["m10"] / M["m00"])
+                    cy = int(M["m01"] / M["m00"])
+                    # 交差部分を紫色でマーク
+                    cv2.circle(work_np, (cx, cy), 5, (255, 0, 255, 255), -1)
+            
+            # 16. 赤と青のマスクは既にあるものとする
+            #     red_mask, blue_mask, あと交差マスク intersection_mask
+
+            # 16-1. 交差点を検出
+            contours, _ = cv2.findContours(intersection_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            intersection_points = []
+            for cnt in contours:
+                M = cv2.moments(cnt)
+                if M["m00"] != 0:
+                    cx = int(M["m10"] / M["m00"])
+                    cy = int(M["m01"] / M["m00"])
+                    intersection_points.append((cx, cy))
+
+            # 交差点が2つ想定されている前提 (複数あれば近い順に2つ取るなどの工夫)
+            if len(intersection_points) >= 2:
+                P1 = intersection_points[0]
+                P2 = intersection_points[1]
+            else:
+                # 万一2つ見つからなければ、無理やり処理するか中断するか
+                print("交差点が2つ見つからないので処理できません")
+                # return あるいは continue
+
+            # 16-2. 青線を「U字型 → 閉じた多角形」にするため、P1～P2を結ぶ線を描画
+            #       blue_mask は 1ch。太さや色(=255)に注意
+            blue_closed = blue_mask.copy()
+            cv2.line(blue_closed, P1, P2, 255, thickness=5)  # 適度に太い線で結ぶ
+
+            # 16-3. 「青線で閉じた形」を内部塗りつぶし
+            #       1) 線部分は白(255)、その他は黒(0)になっているはずなので、
+            #          findContours → drawContours(..., -1, FILLED) で塗りつぶすか
+            #          floodFill でもOK
+            tmp = blue_closed.copy()
+            contours_b, _ = cv2.findContours(tmp, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            blue_fill = np.zeros_like(blue_closed)
+            cv2.drawContours(blue_fill, contours_b, -1, 255, thickness=cv2.FILLED)
+            # blue_fill=255 の領域が「青線で囲われた内部」
+
+            # 16-4. 赤線(キャラ)の内部領域も同様に塗りつぶす
+            tmp_r = red_mask.copy()
+            contours_r, _ = cv2.findContours(tmp_r, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            red_fill = np.zeros_like(red_mask)
+            cv2.drawContours(red_fill, contours_r, -1, 255, thickness=cv2.FILLED)
+
+            # 16-5. 2つの領域を OR → キャラ+台座の合体領域
+            union_fill = cv2.bitwise_or(red_fill, blue_fill)
+
+            # 16-6. 上記 union_fill の最外周をとれば「最も外側の輪郭」1本
+            contours_u, _ = cv2.findContours(union_fill, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            if len(contours_u) > 0:
+                outer_contour = max(contours_u, key=cv2.contourArea)
+                # outer_contour がキャラ＋台座の外周
+
+                # 例: 緑色で輪郭線を描画
+                #     work_np: RGBA (H,W,4)
+                #     BGRで言うと(0,255,0)が緑
+                #     ただし RGBA の順なら(0,255,0,255)
+                cv2.drawContours(work_np, [outer_contour], -1, (0, 255, 0, 255), thickness=5)
+
+                # あるいはアルファチャンネルで内側以外を透明にしたいなら:
+                #    内部をFILLしたマスクをもう一度作ってアルファを0に、といった処理をすればOK
+
+            # これで「交差点で外側が青線に切り替わり、最も外周だけを一周する輪郭線」を
+            # 最終的に緑色で描画できます。
+
+            # これで「赤線と青線が交差した箇所で、外側をたどる一つの輪郭線」のみになる
+            self.work_image = Image.fromarray(work_np)
+            self.update_image_display(self.work_image)
+
+
         except Exception as e:
             print("Error in combine_base:", e)
             traceback.print_exc()
+
 
 def main():
     root = TkinterDnD.Tk()
