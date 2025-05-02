@@ -337,44 +337,75 @@ class ImageProcessingApp:
             ]
 
             # 10. 赤線と青線のマスクを作成
+            # キャンバス拡張前の処理
+            work_np = np.array(self.work_image)
             red_mask = np.zeros(work_np.shape[:2], dtype=np.uint8)
             blue_mask = np.zeros(work_np.shape[:2], dtype=np.uint8)
             
-            # 赤線の検出 (R>200, G<50, B<50)
+            # 赤線の検出と処理
             red_condition = (
-                (work_np[:, :, 0] > 200) &  # R > 200
-                (work_np[:, :, 1] < 50) &   # G < 50
-                (work_np[:, :, 2] < 50)     # B < 50
+                (work_np[:, :, 0] > 200) &
+                (work_np[:, :, 1] < 50) &
+                (work_np[:, :, 2] < 50)
             )
             red_mask[red_condition] = 255
-
-                    # ──────────── ここからが追加部分 ────────────
-            # 3. 赤線だけを消す（元画像のピクセルで上書き）
-            orig_np = np.array(self.current_image.convert("RGBA"))
-            # 赤線マスクが立っている場所だけ、元画像のRGBAをコピー
-            work_np[red_mask == 255] = orig_np[red_mask == 255]
-            # 再び PIL Image に戻して self.work_image をリセット
-            self.work_image = Image.fromarray(work_np)
-            # ──────────── ここまでが追加部分 ────────────
             
+            # 赤線を元の画像で上書き
+            orig_np = np.array(self.current_image.convert("RGBA"))
+            work_np[red_condition] = orig_np[red_condition]
+            self.work_image = Image.fromarray(work_np)
+
+            # キャンバス拡張
+            current_w, current_h = self.work_image.size
+            new_h = current_h + 50
+            new_canvas = Image.new('RGBA', (current_w, new_h), (0, 0, 0, 0))
+            new_canvas.paste(self.work_image, (0, 0))
+            self.work_image = new_canvas
+
+            # 拡張後の新しいマスクを作成
+            work_np = np.array(self.work_image)
+            new_red_mask = np.zeros(work_np.shape[:2], dtype=np.uint8)
+            new_blue_mask = np.zeros(work_np.shape[:2], dtype=np.uint8)
+            
+            # 元のred_maskを新しいマスクの対応する位置にコピー
+            new_red_mask[:current_h, :] = red_mask
+            red_mask = new_red_mask  # red_maskを更新
+
             # 11. 青線を描画
             draw = ImageDraw.Draw(self.work_image)
-            line_color = (0, 0, 255, 255)  # 青色
-            lw = 3  # 線の太さ
+            line_color = (0, 0, 255, 255)
+            lw = 3
             
             # 台座の水平線と垂直2本を描画
             draw.line(horizontal_guide_pedestal, fill=line_color, width=lw)
             draw.line(vertical_left, fill=line_color, width=lw)
             draw.line(vertical_right, fill=line_color, width=lw)
+
+            # 台座画像（PIL Image）pedestal が既に用意できている前提
+            pw, ph = pedestal.size
+
+            # 青い矩形の下端Y座標を取得
+            base_top_y = horizontal_guide_pedestal[0][1]  # = y_feet
+
+            # 矩形の中央に寄せるためのXオフセットを計算
+            left_x, _ = horizontal_guide_pedestal[0]
+            right_x, _ = horizontal_guide_pedestal[1]
+            rect_width = right_x - left_x
+            offset_x = left_x + (rect_width - pw) // 2
+
+            # self.work_image は PIL Image (RGBA)
+            # pedestal のアルファをマスクにして貼り付け
+            self.work_image.paste(pedestal, (offset_x, base_top_y), pedestal)
             
-            # 12. 青線のマスクを作成
+            # 12. 青線のマスクを作成（拡張後のサイズで）
             work_np = np.array(self.work_image)
             blue_condition = (
-                (work_np[:, :, 0] < 50) &   # R < 50
-                (work_np[:, :, 1] < 50) &   # G < 50
-                (work_np[:, :, 2] > 200)    # B > 200
+                (work_np[:, :, 0] < 50) &
+                (work_np[:, :, 1] < 50) &
+                (work_np[:, :, 2] > 200)
             )
-            blue_mask[blue_condition] = 255
+            new_blue_mask[blue_condition] = 255
+            blue_mask = new_blue_mask  # blue_maskを更新
             
             # 13. 交差部分を検出
             intersection_mask = cv2.bitwise_and(red_mask, blue_mask)
@@ -464,9 +495,6 @@ class ImageProcessingApp:
                         if (b, g, r) == (0, 255, 0):
                             work_np[yy, xx, 3] = 0
 
-                # あるいはアルファチャンネルで内側以外を透明にしたいなら:
-                #    内部をFILLしたマスクをもう一度作ってアルファを0に、といった処理をすればOK
-
             # これで「交差点で外側が青線に切り替わり、最も外周だけを一周する輪郭線」を
             # 最終的に緑色で描画できます。
 
@@ -474,6 +502,18 @@ class ImageProcessingApp:
             self.work_image = Image.fromarray(work_np)
             self.update_image_display(self.work_image)
 
+            # 台座配置のためにキャンバスを拡張
+            current_w, current_h = self.work_image.size
+            new_h = current_h + 50  # 余裕を持って50px追加
+            
+            # 新しい透明なキャンバスを作成
+            new_canvas = Image.new('RGBA', (current_w, new_h), (0, 0, 0, 0))
+            
+            # 元の画像を新しいキャンバスの上部に配置
+            new_canvas.paste(self.work_image, (0, 0))
+            
+            # 作業用画像を更新
+            self.work_image = new_canvas
 
         except Exception as e:
             print("Error in combine_base:", e)
