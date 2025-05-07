@@ -446,19 +446,14 @@ class ImageProcessingApp:
                 # return あるいは continue
 
             # 16-2. 青線を「U字型 → 閉じた多角形」にするため、P1～P2を結ぶ線を描画
-            #       blue_mask は 1ch。太さや色(=255)に注意
             blue_closed = blue_mask.copy()
             cv2.line(blue_closed, P1, P2, 255, thickness=5)  # 適度に太い線で結ぶ
 
             # 16-3. 「青線で閉じた形」を内部塗りつぶし
-            #       1) 線部分は白(255)、その他は黒(0)になっているはずなので、
-            #          findContours → drawContours(..., -1, FILLED) で塗りつぶすか
-            #          floodFill でもOK
             tmp = blue_closed.copy()
             contours_b, _ = cv2.findContours(tmp, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             blue_fill = np.zeros_like(blue_closed)
             cv2.drawContours(blue_fill, contours_b, -1, 255, thickness=cv2.FILLED)
-            # blue_fill=255 の領域が「青線で囲われた内部」
 
             # 16-4. 赤線(キャラ)の内部領域も同様に塗りつぶす
             tmp_r = red_mask.copy()
@@ -475,30 +470,47 @@ class ImageProcessingApp:
                 outer_contour = max(contours_u, key=cv2.contourArea)
                 # outer_contour がキャラ＋台座の外周
 
-                # 例: 緑色で輪郭線を描画
-                #     work_np: RGBA (H,W,4)
-                #     BGRで言うと(0,255,0)が緑
-                #     ただし RGBA の順なら(0,255,0,255)
+                # 緑色で輪郭線を描画
                 cv2.drawContours(work_np, [outer_contour], -1, (0, 255, 0, 255), thickness=5)
 
                 # P1（左端の交差点）だけを対象に上向きの緑線を消す
-            lw = 5
-            H, W, _ = work_np.shape
-            # intersection_points は [(x1,y1), (x2,y2)] のはずなので
-            # 左端の要素（P1）だけを取り出す
-            points = sorted(intersection_points, key=lambda p: p[0])
-            x0, y0 = points[0]
-            for yy in range(y_25, y0):
-                for xx in range(x0-lw, x0+lw+1):
-                    if 0 <= xx < W:
-                        b, g, r, a = work_np[yy, xx]
-                        if (b, g, r) == (0, 255, 0):
-                            work_np[yy, xx, 3] = 0
+                lw = 5
+                H, W, _ = work_np.shape
+                # intersection_points は [(x1,y1), (x2,y2)] のはずなので
+                # 左端の要素（P1）だけを取り出す
+                points = sorted(intersection_points, key=lambda p: p[0])
+                x0, y0 = points[0]
+                for yy in range(y_25, y0):
+                    for xx in range(x0-lw, x0+lw+1):
+                        if 0 <= xx < W:
+                            b, g, r, a = work_np[yy, xx]
+                            if (b, g, r) == (0, 255, 0):
+                                work_np[yy, xx, 3] = 0
+
+                # 外周輪郭データから直接情報を取得して線を引く
+                # outer_contourから上部の候補点を見つける
+                top_candidates = []
+                for point in outer_contour.reshape(-1, 2):
+                    px, py = point
+                    # 左右の制約を緩めて上部の点を探す
+                    if py < y0 - 20 and abs(px - x0) < 150:  # 広い範囲で探す
+                        top_candidates.append((px, py, ((px-x0)**2 + (py-y0)**2)**0.5))
+
+                # 候補点を距離順にソート
+                if top_candidates:
+                    top_candidates.sort(key=lambda x: x[2])
+                    # 一番近い点を選択
+                    px, py, _ = top_candidates[0]
+                    # 連結線を描画
+                    cv2.line(work_np, (x0, y0), (px, py), (0, 255, 0, 255), thickness=5)
+                else:
+                    # 見つからなかった場合は縦に線を引く
+                    # 画像の上部までの距離を見積もる
+                    est_dist = y0 * 0.7  # 画像上部までの距離の70%程度
+                    cv2.line(work_np, (x0, y0), (x0, int(y0 - est_dist)), (0, 255, 0, 255), thickness=5)
 
             # これで「交差点で外側が青線に切り替わり、最も外周だけを一周する輪郭線」を
             # 最終的に緑色で描画できます。
-
-            # これで「赤線と青線が交差した箇所で、外側をたどる一つの輪郭線」のみになる
             self.work_image = Image.fromarray(work_np)
             self.update_image_display(self.work_image)
 
