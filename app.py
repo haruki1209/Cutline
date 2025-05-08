@@ -476,8 +476,6 @@ class ImageProcessingApp:
                 # P1（左端の交差点）だけを対象に上向きの緑線を消す
                 lw = 5
                 H, W, _ = work_np.shape
-                # intersection_points は [(x1,y1), (x2,y2)] のはずなので
-                # 左端の要素（P1）だけを取り出す
                 points = sorted(intersection_points, key=lambda p: p[0])
                 x0, y0 = points[0]
                 for yy in range(y_25, y0):
@@ -487,27 +485,64 @@ class ImageProcessingApp:
                             if (b, g, r) == (0, 255, 0):
                                 work_np[yy, xx, 3] = 0
 
-                # 外周輪郭データから直接情報を取得して線を引く
-                # outer_contourから上部の候補点を見つける
+                # 外周輪郭から複数の候補点を見つける
                 top_candidates = []
                 for point in outer_contour.reshape(-1, 2):
                     px, py = point
-                    # 左右の制約を緩めて上部の点を探す
-                    if py < y0 - 20 and abs(px - x0) < 150:  # 広い範囲で探す
+                    # 範囲をさらに広げて探す
+                    if py < y0 and abs(px - x0) < 300:  # より広い範囲、y制約も緩和
                         top_candidates.append((px, py, ((px-x0)**2 + (py-y0)**2)**0.5))
 
-                # 候補点を距離順にソート
                 if top_candidates:
+                    # 候補点を距離でソート
                     top_candidates.sort(key=lambda x: x[2])
-                    # 一番近い点を選択
-                    px, py, _ = top_candidates[0]
-                    # 連結線を描画
-                    cv2.line(work_np, (x0, y0), (px, py), (0, 255, 0, 255), thickness=5)
+                    
+                    # より多くの点を選択（または全部）
+                    num_points = min(10, len(top_candidates))
+                    selected_points = top_candidates[:num_points]
+                    
+                    # 選択した点をy座標でソート（上から下へ）
+                    selected_points.sort(key=lambda x: x[1])
+                    
+                    # 接続点リスト（P1も含める）
+                    connection_points = [(x0, y0)]  # P1から開始
+                    
+                    # 選択した外周点を追加
+                    for px, py, _ in selected_points:
+                        connection_points.append((px, py))
+                    
+                    # 外周上の点を中間点として追加（補間）
+                    full_connection_points = [connection_points[0]]
+                    
+                    # 各点間を補間して隙間を埋める
+                    for i in range(len(connection_points)-1):
+                        p1 = connection_points[i]
+                        p2 = connection_points[i+1]
+                        
+                        # 現在の点を追加
+                        full_connection_points.append(p2)
+                        
+                        # 距離が遠い場合は中間点を追加
+                        dist = ((p1[0]-p2[0])**2 + (p1[1]-p2[1])**2)**0.5
+                        if dist > 15:  # 15px以上離れている場合
+                            # 中間点を追加
+                            mid_x = (p1[0] + p2[0]) // 2
+                            mid_y = (p1[1] + p2[1]) // 2
+                            full_connection_points.append((mid_x, mid_y))
+                    
+                    # ポイント間を結ぶ滑らかな線を描画（太さ増加）
+                    for i in range(len(full_connection_points)-1):
+                        p1 = full_connection_points[i]
+                        p2 = full_connection_points[i+1]
+                        cv2.line(work_np, p1, p2, (0, 255, 0, 255), thickness=7)  # 太さを7に増加
+                    
+                    # さらに接続点周辺を緑色で強化
+                    for p in full_connection_points:
+                        cv2.circle(work_np, p, 3, (0, 255, 0, 255), -1)  # 接続点を緑で強調
                 else:
-                    # 見つからなかった場合は縦に線を引く
-                    # 画像の上部までの距離を見積もる
-                    est_dist = y0 * 0.7  # 画像上部までの距離の70%程度
-                    cv2.line(work_np, (x0, y0), (x0, int(y0 - est_dist)), (0, 255, 0, 255), thickness=5)
+                    # 候補点が見つからない場合は単純な直線
+                    fixed_point = (x0, max(0, y0 - 100))
+                    cv2.line(work_np, (x0, y0), fixed_point, (0, 255, 0, 255), thickness=7)
 
             # これで「交差点で外側が青線に切り替わり、最も外周だけを一周する輪郭線」を
             # 最終的に緑色で描画できます。
