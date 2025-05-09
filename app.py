@@ -6,6 +6,7 @@ from PIL import Image, ImageTk, ImageDraw
 import os
 from tkinterdnd2 import DND_FILES, TkinterDnD
 import traceback
+import base64
 
 class ImageProcessingApp:
     def __init__(self, root):
@@ -114,6 +115,7 @@ class ImageProcessingApp:
             text="画像出力",
             style="Gray.TButton",
             width=15,
+            command=self.export_to_svg,
             state="disabled"
         )
         self.output_btn.grid(row=0, column=2, padx=5)
@@ -414,14 +416,14 @@ class ImageProcessingApp:
             contours, _ = cv2.findContours(intersection_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             
             # 15. 交差部分を紫色でマーク
-            for cnt in contours:
+            #for cnt in contours:
                  #交差部分の中心を計算
-                M = cv2.moments(cnt)
-                if M["m00"] != 0:
-                    cx = int(M["m10"] / M["m00"])
-                    cy = int(M["m01"] / M["m00"])
+                #M = cv2.moments(cnt)
+                #if M["m00"] != 0:
+                    #cx = int(M["m10"] / M["m00"])
+                    #cy = int(M["m01"] / M["m00"])
                      #交差部分を紫色でマーク
-                    cv2.circle(work_np, (cx, cy), 5, (255, 0, 255, 255), -1)
+                    #cv2.circle(work_np, (cx, cy), 5, (255, 0, 255, 255), -1)
             
             # 16. 赤と青のマスクは既にあるものとする
             #     red_mask, blue_mask, あと交差マスク intersection_mask
@@ -566,6 +568,63 @@ class ImageProcessingApp:
             print("Error in combine_base:", e)
             traceback.print_exc()
 
+    def export_to_svg(self):
+        if self.work_image is None:
+            return
+        
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=".svg",
+            filetypes=[("SVG files", "*.svg"), ("All files", "*.*")]
+        )
+        
+        if not file_path:
+            return
+        
+        # 輪郭抽出用の画像
+        img_np = np.array(self.work_image)
+        
+        # 緑色の輪郭線を抽出
+        green_mask = np.zeros(img_np.shape[:2], dtype=np.uint8)
+        green_pixels = (img_np[:,:,0]<50) & (img_np[:,:,1]>200) & (img_np[:,:,2]<50) & (img_np[:,:,3]>50)
+        green_mask[green_pixels] = 255
+        
+        # 輪郭抽出
+        contours, _ = cv2.findContours(green_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        # 緑色の輪郭線を透明にした画像を作成
+        img_copy = img_np.copy()
+        img_copy[green_pixels] = [0, 0, 0, 0]
+        clean_image = Image.fromarray(img_copy)
+        
+        # 一時ファイルに保存
+        temp_png = "temp_export.png"
+        clean_image.save(temp_png)
+        
+        # Base64エンコード
+        with open(temp_png, "rb") as img_file:
+            img_data = base64.b64encode(img_file.read()).decode('utf-8')
+        
+        # SVG作成
+        width, height = self.work_image.size
+        with open(file_path, 'w') as f:
+            f.write(f'<svg width="{width}" height="{height}" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">\n')
+            
+            # 元画像を埋め込み
+            f.write(f'  <image width="{width}" height="{height}" xlink:href="data:image/png;base64,{img_data}"/>\n')
+            
+            # 輪郭線を追加
+            for contour in contours:
+                if cv2.contourArea(contour) < 100:
+                    continue
+                points = contour.reshape(-1, 2)
+                path_data = 'M' + ' L'.join([f"{p[0]},{p[1]}" for p in points]) + 'Z'
+                f.write(f'  <path d="{path_data}" stroke="black" fill="none" stroke-width="1"/>\n')
+            
+            f.write('</svg>')
+        
+        # 一時ファイル削除
+        if os.path.exists(temp_png):
+            os.remove(temp_png)
 
 def main():
     root = TkinterDnD.Tk()
