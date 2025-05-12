@@ -1,6 +1,25 @@
+# PyInstaller生成物
+build/
+dist/
+*.spec
+
+# VS Code設定
+.vscode/
+*.code-workspace
+
+# 一時ファイル
+temp_export.png
+*.tmp
+
+# Windows関連
+Thumbs.db
+desktop.ini
+*.lnk
+
+# Python環境
 venv/
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-*.pyw
+.python-version
+
+
+# プロジェクト固有の一時ファイル
+*.svg
