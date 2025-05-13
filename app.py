@@ -588,8 +588,26 @@ class ImageProcessingApp:
         green_pixels = (img_np[:,:,0]<50) & (img_np[:,:,1]>200) & (img_np[:,:,2]<50) & (img_np[:,:,3]>50)
         green_mask[green_pixels] = 255
         
-        # 輪郭抽出
-        contours, _ = cv2.findContours(green_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        # 前処理を強化
+        # ギャップを埋めるために膨張処理
+        dilate_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+        green_mask = cv2.dilate(green_mask, dilate_kernel, iterations=1)
+        
+        # ブラー処理
+        green_mask = cv2.GaussianBlur(green_mask, (9, 9), 0)
+        _, green_mask = cv2.threshold(green_mask, 127, 255, cv2.THRESH_BINARY)
+        
+        # モルフォロジー処理で形状を整える
+        close_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))
+        green_mask = cv2.morphologyEx(green_mask, cv2.MORPH_CLOSE, close_kernel)
+        
+        # 輪郭抽出 - 間引かないで全ての点を取得
+        contours, _ = cv2.findContours(green_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+        
+        # 最大の輪郭だけを選択
+        if contours:
+            main_contour = max(contours, key=cv2.contourArea)
+            contours = [main_contour]
         
         # 緑色の輪郭線を透明にした画像を作成
         img_copy = img_np.copy()
@@ -604,10 +622,12 @@ class ImageProcessingApp:
         with open(temp_png, "rb") as img_file:
             img_data = base64.b64encode(img_file.read()).decode('utf-8')
         
-        # SVG作成
+        # SVG作成 - Adobe互換性向上
         width, height = self.work_image.size
         with open(file_path, 'w') as f:
-            f.write(f'<svg width="{width}" height="{height}" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">\n')
+            # SVGヘッダー - Adobe互換性のためXML宣言を追加
+            f.write(f'<?xml version="1.0" encoding="UTF-8" standalone="no"?>\n')
+            f.write(f'<svg width="{width}" height="{height}" viewBox="0 0 {width} {height}" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" version="1.1">\n')
             
             # 元画像を埋め込み
             f.write(f'  <image width="{width}" height="{height}" xlink:href="data:image/png;base64,{img_data}"/>\n')
@@ -616,10 +636,154 @@ class ImageProcessingApp:
             for contour in contours:
                 if cv2.contourArea(contour) < 100:
                     continue
-                points = contour.reshape(-1, 2)
-                path_data = 'M' + ' L'.join([f"{p[0]},{p[1]}" for p in points]) + 'Z'
-                f.write(f'  <path d="{path_data}" stroke="black" fill="none" stroke-width="1"/>\n')
-            
+                
+                # 元の輪郭点を適度に間引く
+                # 均等な間隔で点を選択（approxPolyDPは使わない）
+                points = []
+                step = max(1, len(contour) // 150)  # 約150点に抑える
+                for i in range(0, len(contour), step):
+                    points.append(contour[i][0].tolist())
+                
+                # 閉じた形状にする
+                if points and points[0] != points[-1]:
+                    points.append(points[0])
+                
+                # 台座部分を識別するためのY値境界を計算
+                y_values = [p[1] for p in points]
+                min_y, max_y = min(y_values), max(y_values)
+                base_threshold = min_y + (max_y - min_y) * 0.95  # 下部15%を台座領域に設定
+                
+                # 台座部分の点を識別
+                base_points_indices = []
+                for i, p in enumerate(points):
+                    if p[1] > base_threshold:
+                        base_points_indices.append(i)
+                
+                # 台座の左端と右端を特定
+                if base_points_indices:
+                    # ソートして連続領域を見つける
+                    base_regions = []
+                    current_region = [base_points_indices[0]]
+                    
+                    for i in range(1, len(base_points_indices)):
+                        if base_points_indices[i] - base_points_indices[i-1] <= 1:
+                            current_region.append(base_points_indices[i])
+                        else:
+                            base_regions.append(current_region)
+                            current_region = [base_points_indices[i]]
+                    
+                    if current_region:
+                        base_regions.append(current_region)
+                    
+                    # 輪郭が閉じているため、最初と最後の領域が繋がっているか確認
+                    if base_regions and len(base_regions) > 1:
+                        first_region = base_regions[0]
+                        last_region = base_regions[-1]
+                        if last_region[-1] == len(points) - 1 and first_region[0] == 0:
+                            # 繋がっている場合は統合
+                            base_regions[-1].extend(first_region)
+                            base_regions.pop(0)
+                
+                # 点数が十分あるか確認
+                if len(points) >= 4:
+                    # 開始点
+                    path_data = f"M{points[0][0]},{points[0][1]}"
+                    
+                    # 最初のセグメントの準備
+                    p0 = points[0]
+                    p1 = points[1]
+                    p2 = points[2]
+                    
+                    # 最初の制御点
+                    cp1_x = p0[0] + (p1[0] - p0[0]) / 3
+                    cp1_y = p0[1] + (p1[1] - p0[1]) / 3
+                    
+                    # 2番目の制御点
+                    cp2_x = p1[0] - (p2[0] - p0[0]) / 6
+                    cp2_y = p1[1] - (p2[1] - p0[1]) / 6
+                    
+                    # 台座部分かどうかを判定
+                    is_base_point = 1 in base_points_indices
+                    
+                    if is_base_point:
+                        # 台座部分は直線で
+                        path_data += f" C{cp1_x},{cp1_y} {cp2_x},{cp2_y} {p1[0]},{p1[1]}"
+                    else:
+                        # 通常部分は曲線で
+                        path_data += f" C{cp1_x},{cp1_y} {cp2_x},{cp2_y} {p1[0]},{p1[1]}"
+                    
+                    # 残りの点の処理
+                    prev_cp2_x, prev_cp2_y = cp2_x, cp2_y
+                    prev_x, prev_y = p1[0], p1[1]
+                    
+                    for i in range(2, len(points)):
+                        p = points[i]
+                        
+                        # 台座部分かどうかを判定
+                        is_base_point = i in base_points_indices
+                        
+                        if is_base_point:
+                            # 台座部分は直線で処理
+                            path_data += f" L{p[0]},{p[1]}"
+                            # 直線部分の後も制御点情報を更新（次の曲線のため）
+                            prev_cp2_x = prev_x + (p[0] - prev_x) / 3
+                            prev_cp2_y = prev_y + (p[1] - prev_y) / 3
+                            prev_x, prev_y = p[0], p[1]
+                        else:
+                            # 通常部分はベジェ曲線で処理
+                            if i < len(points) - 1:
+                                # 前の制御点の反射を計算
+                                reflect_x = 2 * prev_x - prev_cp2_x
+                                reflect_y = 2 * prev_y - prev_cp2_y
+                                
+                                # 次の点への方向
+                                next_idx = (i + 1) % len(points)
+                                next_p = points[next_idx]
+                                
+                                # 方向ベクトル
+                                dx = next_p[0] - p[0]
+                                dy = next_p[1] - p[1]
+                                
+                                # 第2制御点
+                                cp2_x = p[0] - dx / 3
+                                cp2_y = p[1] - dy / 3
+                                
+                                # Cコマンドで曲線を描画
+                                path_data += f" C{reflect_x},{reflect_y} {cp2_x},{cp2_y} {p[0]},{p[1]}"
+                                
+                                # 次のイテレーションのために保存
+                                prev_cp2_x, prev_cp2_y = cp2_x, cp2_y
+                                prev_x, prev_y = p[0], p[1]
+                            else:
+                                # 最後の点は閉じるように処理
+                                first_p = points[0]
+                                
+                                # 最後の点が台座部分なら直線で閉じる
+                                if 0 in base_points_indices:
+                                    path_data += f" L{first_p[0]},{first_p[1]}"
+                                else:
+                                    # 通常部分なら曲線で閉じる
+                                    reflect_x = 2 * prev_x - prev_cp2_x
+                                    reflect_y = 2 * prev_y - prev_cp2_y
+                                    
+                                    dx = first_p[0] - p[0]
+                                    dy = first_p[1] - p[1]
+                                    
+                                    cp2_x = p[0] + dx / 3
+                                    cp2_y = p[1] + dy / 3
+                                    
+                                    path_data += f" C{reflect_x},{reflect_y} {cp2_x},{cp2_y} {first_p[0]},{first_p[1]}"
+                    
+                    # 閉じる
+                    path_data += "Z"
+                    
+                    # パスを書き込み
+                    f.write(f'  <path d="{path_data}" stroke="#000000" stroke-width="1.2" fill="none" stroke-linejoin="round" stroke-linecap="round"/>\n')
+                else:
+                    # 点数が少ない場合
+                    path_data = "M" + " L".join([f"{p[0]},{p[1]}" for p in points]) + "Z"
+                    f.write(f'  <path d="{path_data}" stroke="#000000" stroke-width="1.2" fill="none"/>\n')
+        
             f.write('</svg>')
         
         # 一時ファイル削除
