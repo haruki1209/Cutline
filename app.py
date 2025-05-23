@@ -24,8 +24,8 @@ class ImageProcessingApp:
         self.max_zoom = 5.0
 
         # モルフォロジーのパラメータ（調整可能）
-        self.gap = 25
-        self.thickness = 5
+        self.gap =5
+        self.thickness = 2
 
         # 台座関連の設定
         self.base_var = tk.StringVar(value="16mm")
@@ -237,8 +237,8 @@ class ImageProcessingApp:
             binm = self.get_binary_mask(img_bgr)
 
             # 2. モルフォロジーでリング状の輪郭抽出
-            k1 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2*self.gap+1, 2*self.gap+1))
-            k2 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2*(self.gap+self.thickness)+1, 2*(self.gap+self.thickness)+1))
+            k1 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))
+            k2 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
             ring = cv2.subtract(cv2.dilate(binm, k2), cv2.dilate(binm, k1))
             
             # 3. work_imageに赤色で輪郭線を描画
@@ -398,7 +398,7 @@ class ImageProcessingApp:
             # self.work_image は PIL Image (RGBA)
             # pedestal のアルファをマスクにして貼り付け
             self.work_image.paste(pedestal, (offset_x, base_top_y), pedestal)
-            
+
             # 12. 青線のマスクを作成（拡張後のサイズで）
             work_np = np.array(self.work_image)
             blue_condition = (
@@ -406,9 +406,10 @@ class ImageProcessingApp:
                 (work_np[:, :, 1] < 50) &
                 (work_np[:, :, 2] > 200)
             )
+            new_blue_mask = np.zeros_like(work_np[:, :, 0])
             new_blue_mask[blue_condition] = 255
             blue_mask = new_blue_mask  # blue_maskを更新
-            
+
             # 13. 交差部分を検出
             intersection_mask = cv2.bitwise_and(red_mask, blue_mask)
             
@@ -789,6 +790,75 @@ class ImageProcessingApp:
         # 一時ファイル削除
         if os.path.exists(temp_png):
             os.remove(temp_png)
+        
+        # SVGファイルの確認
+        print("\nSVGファイルの確認結果:")
+        check_svg_path(file_path)
+
+        # 輪郭抽出のデバッグ
+        print("輪郭の数:", len(contours))
+        print("最大輪郭の面積:", cv2.contourArea(main_contour))
+        
+        # 点の間引きのデバッグ
+        print("元の点の数:", len(contour))
+        print("間引き後の点の数:", len(points))
+        
+        # パスデータのデバッグ
+        print("生成されたパスデータ:", path_data[:100] + "..." if len(path_data) > 100 else path_data)
+
+def verify_svg_path(svg_file_path):
+    try:
+        with open(svg_file_path, 'r') as f:
+            content = f.read()
+            
+        # path要素の存在確認
+        has_path = '<path' in content
+        
+        # path要素の属性確認
+        has_path_data = 'd="' in content
+        
+        # ベジェ曲線コマンドの確認
+        has_bezier = 'C' in content or 'c' in content
+        
+        return {
+            'has_path_element': has_path,
+            'has_path_data': has_path_data,
+            'has_bezier_curves': has_bezier
+        }
+    except Exception as e:
+        return {'error': str(e)}
+
+def check_svg_path(svg_file_path):
+    try:
+        with open(svg_file_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+            
+        # 1. パス要素の存在確認
+        if '<path' not in content:
+            print("パス要素が存在しません")
+            return False
+            
+        # 2. パスデータの内容確認
+        path_data = content.split('d="')[1].split('"')[0]
+        print("パスデータ:", path_data[:100] + "..." if len(path_data) > 100 else path_data)
+        
+        # 3. ベジェ曲線コマンドの確認
+        if 'C' in path_data or 'c' in path_data:
+            print("ベジェ曲線が使用されています")
+        else:
+            print("ベジェ曲線が使用されていません")
+            
+        # 4. パスが閉じているか確認
+        if path_data.endswith('Z'):
+            print("パスは閉じられています")
+        else:
+            print("パスが閉じられていません")
+            
+        return True
+        
+    except Exception as e:
+        print(f"エラーが発生しました: {e}")
+        return False
 
 def main():
     root = TkinterDnD.Tk()
