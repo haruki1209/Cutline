@@ -24,8 +24,8 @@ class ImageProcessingApp:
         self.max_zoom = 5.0
 
         # モルフォロジーのパラメータ（調整可能）
-        self.gap =5
-        self.thickness = 2
+        self.gap = 2  # 10から2に変更（2mm幅の輪郭線のため）
+        self.thickness = 1  # 2から1に変更（より細かい制御のため）
 
         # 台座関連の設定
         self.base_var = tk.StringVar(value="16mm")
@@ -236,9 +236,9 @@ class ImageProcessingApp:
             img_bgr = cv2.cvtColor(np.array(self.current_image), cv2.COLOR_RGB2BGR)
             binm = self.get_binary_mask(img_bgr)
 
-            # 2. モルフォロジーでリング状の輪郭抽出
-            k1 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))
-            k2 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
+            # 2. モルフォロジーでリング状の輪郭抽出（2mm幅に調整）
+            k1 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))  # より小さいカーネル
+            k2 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))  # 2mm幅になるように調整
             ring = cv2.subtract(cv2.dilate(binm, k2), cv2.dilate(binm, k1))
             
             # 3. work_imageに赤色で輪郭線を描画
@@ -343,7 +343,7 @@ class ImageProcessingApp:
             work_np = np.array(self.work_image)
             red_mask = np.zeros(work_np.shape[:2], dtype=np.uint8)
             blue_mask = np.zeros(work_np.shape[:2], dtype=np.uint8)
-
+            
             # 赤線の検出と処理
             red_condition = (
                 (work_np[:, :, 0] > 200) &
@@ -351,25 +351,27 @@ class ImageProcessingApp:
                 (work_np[:, :, 2] < 50)
             )
             red_mask[red_condition] = 255
-
+            
             # 赤線を元の画像で上書き
             orig_np = np.array(self.current_image.convert("RGBA"))
             work_np[red_condition] = orig_np[red_condition]
             self.work_image = Image.fromarray(work_np)
 
-            # 1) 拡張前の元サイズ
+            # キャンバス拡張
             current_w, current_h = self.work_image.size
-
-            # 2) 台座の高さ ph を使ってキャンバスを拡張
-            new_h = current_h + ph
+            new_h = current_h + 50
             new_canvas = Image.new('RGBA', (current_w, new_h), (0, 0, 0, 0))
             new_canvas.paste(self.work_image, (0, 0))
             self.work_image = new_canvas
 
-            # 3) マスクも同じサイズで初期化
-            new_red_mask = np.zeros((new_h, current_w), dtype=np.uint8)
+            # 拡張後の新しいマスクを作成
+            work_np = np.array(self.work_image)
+            new_red_mask = np.zeros(work_np.shape[:2], dtype=np.uint8)
+            new_blue_mask = np.zeros(work_np.shape[:2], dtype=np.uint8)
+            
+            # 元のred_maskを新しいマスクの対応する位置にコピー
             new_red_mask[:current_h, :] = red_mask
-            red_mask = new_red_mask
+            red_mask = new_red_mask  # red_maskを更新
 
             # 11. 青線を描画
             draw = ImageDraw.Draw(self.work_image)
@@ -381,32 +383,22 @@ class ImageProcessingApp:
             draw.line(vertical_left, fill=line_color, width=lw)
             draw.line(vertical_right, fill=line_color, width=lw)
 
-            # 補助線の最下部（青線の底辺）を取得
-            base_line_y = horizontal_guide_pedestal[0][1]  # 青線の底辺のY座標
-            left_x = horizontal_guide_pedestal[0][0]       # 青線の左端のX座標
-            right_x = horizontal_guide_pedestal[1][0]      # 青線の右端のX座標
+            # 台座画像（PIL Image）pedestal が既に用意できている前提
+            pw, ph = pedestal.size
 
-            # 台座の配置位置を計算（青線の底辺に合わせる）
+            # 青い矩形の下端Y座標を取得
+            base_top_y = horizontal_guide_pedestal[0][1]  # = y_feet
+
+            # 矩形の中央に寄せるためのXオフセットを計算
+            left_x, _ = horizontal_guide_pedestal[0]
+            right_x, _ = horizontal_guide_pedestal[1]
             rect_width = right_x - left_x
             offset_x = left_x + (rect_width - pw) // 2
-            base_top_y = base_line_y  # 青線の底辺に合わせる
+
+            # self.work_image は PIL Image (RGBA)
+            # pedestal のアルファをマスクにして貼り付け
             self.work_image.paste(pedestal, (offset_x, base_top_y), pedestal)
-
-            # 台座の緑線描画（1回だけ）
-            base_corners = [
-                (offset_x, base_top_y),
-                (offset_x + pw, base_top_y),
-                (offset_x + pw, base_top_y + ph),
-                (offset_x, base_top_y + ph)
-            ]
-
-            draw = ImageDraw.Draw(self.work_image)
-            green_color = (0, 255, 0, 255)
-            for i in range(len(base_corners)):
-                start = base_corners[i]
-                end = base_corners[(i + 1) % len(base_corners)] 
-                draw.line([start, end], fill=green_color, width=3)
-
+            
             # 12. 青線のマスクを作成（拡張後のサイズで）
             work_np = np.array(self.work_image)
             blue_condition = (
@@ -414,9 +406,9 @@ class ImageProcessingApp:
                 (work_np[:, :, 1] < 50) &
                 (work_np[:, :, 2] > 200)
             )
-            blue_mask = np.zeros_like(work_np[:, :, 0])
-            blue_mask[blue_condition] = 255
-
+            new_blue_mask[blue_condition] = 255
+            blue_mask = new_blue_mask  # blue_maskを更新
+            
             # 13. 交差部分を検出
             intersection_mask = cv2.bitwise_and(red_mask, blue_mask)
             
@@ -433,8 +425,7 @@ class ImageProcessingApp:
                      #交差部分を紫色でマーク
                     #cv2.circle(work_np, (cx, cy), 5, (255, 0, 255, 255), -1)
             
-            # 16. 赤と青のマスクは既にあるものとする
-            #     red_mask, blue_mask, あと交差マスク intersection_mask
+            # 16. 赤と青のマスクは既にあるものとするk
 
             # 16-1. 交差点を検出
             contours, _ = cv2.findContours(intersection_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -451,6 +442,7 @@ class ImageProcessingApp:
                 P1 = intersection_points[0]
                 P2 = intersection_points[1]
             else:
+                # 万一2つ見つからなければ、無理やり処理するか中断するか
                 print("交差点が2つ見つからないので処理できません")
                 # return あるいは continue
 
@@ -499,7 +491,7 @@ class ImageProcessingApp:
                 for point in outer_contour.reshape(-1, 2):
                     px, py = point
                     # 範囲をさらに広げて探す
-                    if py < y0 and abs(px - x0) < 300:
+                    if py < y0 and abs(px - x0) < 300:  # より広い範囲、y制約も緩和
                         top_candidates.append((px, py, ((px-x0)**2 + (py-y0)**2)**0.5))
 
                 if top_candidates:
@@ -533,7 +525,8 @@ class ImageProcessingApp:
                         
                         # 距離が遠い場合は中間点を追加
                         dist = ((p1[0]-p2[0])**2 + (p1[1]-p2[1])**2)**0.5
-                        if dist > 15:
+                        if dist > 15:  # 15px以上離れている場合
+                            # 中間点を追加
                             mid_x = (p1[0] + p2[0]) // 2
                             mid_y = (p1[1] + p2[1]) // 2
                             full_connection_points.append((mid_x, mid_y))
@@ -542,38 +535,50 @@ class ImageProcessingApp:
                     for i in range(len(full_connection_points)-1):
                         p1 = full_connection_points[i]
                         p2 = full_connection_points[i+1]
-                        cv2.line(work_np, p1, p2, (0, 255, 0, 255), thickness=7) 
+                        cv2.line(work_np, p1, p2, (0, 255, 0, 255), thickness=7)  # 太さを7に増加
                     
                     # さらに接続点周辺を緑色で強化
                     for p in full_connection_points:
-                        cv2.circle(work_np, p, 3, (0, 255, 0, 255), -1) 
+                        cv2.circle(work_np, p, 3, (0, 255, 0, 255), -1)  # 接続点を緑で強調
                 else:
+                    # 候補点が見つからない場合は単純な直線
                     fixed_point = (x0, max(0, y0 - 100))
                     cv2.line(work_np, (x0, y0), fixed_point, (0, 255, 0, 255), thickness=7)
 
             # これで「交差点で外側が青線に切り替わり、最も外周だけを一周する輪郭線」を
             # 最終的に緑色で描画できます。
             self.work_image = Image.fromarray(work_np)
+            self.update_image_display(self.work_image)
 
-            # ⑯の処理の後に台座の緑線を再描画
-            draw = ImageDraw.Draw(self.work_image)
-            green_color = (0, 255, 0, 255)
+            # 台座配置のためにキャンバスを拡張
+            current_w, current_h = self.work_image.size
+            new_h = current_h + 50  # 余裕を持って50px追加
+            
+            # 新しい透明なキャンバスを作成
+            new_canvas = Image.new('RGBA', (current_w, new_h), (0, 0, 0, 0))
+            
+            # 元の画像を新しいキャンバスの上部に配置
+            new_canvas.paste(self.work_image, (0, 0))
+            
+            # 作業用画像を更新
+            self.work_image = new_canvas
 
-            # 台座の4点の座標を再計算
-            base_corners = [
-                (offset_x, base_top_y),
-                (offset_x + pw, base_top_y),
-                (offset_x + pw, base_top_y + ph),
-                (offset_x, base_top_y + ph),
-                (offset_x, base_top_y)  # 閉じる
-            ]
+            # 台座部分の輪郭線を追加
+            base_contour = np.array([
+                [[offset_x, base_top_y]],  # 左上
+                [[offset_x + pw, base_top_y]],  # 右上
+                [[offset_x + pw, base_top_y + ph]],  # 右下
+                [[offset_x, base_top_y + ph]],  # 左下
+                [[offset_x, base_top_y]]  # 左上に戻る（閉じる）
+            ], dtype=np.int32)
 
-            # 台座の緑線を描画
-            for i in range(len(base_corners) - 1):
-                start = base_corners[i]
-                end = base_corners[i + 1]
-                draw.line([start, end], fill=green_color, width=3)
+            # 台座の輪郭線を緑色で描画
+            cv2.drawContours(work_np, [base_contour], -1, (0, 255, 0, 255), thickness=2)
 
+            # work_imageを更新
+            self.work_image = Image.fromarray(work_np)
+            
+            # 表示を更新
             self.update_image_display(self.work_image)
 
         except Exception as e:
@@ -602,15 +607,15 @@ class ImageProcessingApp:
         
         # 前処理を強化
         # ギャップを埋めるために膨張処理
-        dilate_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+        dilate_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))  # 7から9に増加
         green_mask = cv2.dilate(green_mask, dilate_kernel, iterations=1)
         
-        # ブラー処理
-        green_mask = cv2.GaussianBlur(green_mask, (9, 9), 0)
+        # ブラー処理を強化
+        green_mask = cv2.GaussianBlur(green_mask, (15, 15), 2)  # カーネルサイズとシグマ値を調整
         _, green_mask = cv2.threshold(green_mask, 127, 255, cv2.THRESH_BINARY)
         
         # モルフォロジー処理で形状を整える
-        close_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))
+        close_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))  # 11から15に増加
         green_mask = cv2.morphologyEx(green_mask, cv2.MORPH_CLOSE, close_kernel)
         
         # 輪郭抽出 - 間引かないで全ての点を取得
@@ -648,11 +653,31 @@ class ImageProcessingApp:
             for contour in contours:
                 if cv2.contourArea(contour) < 100:
                     continue
+                
+                # 点の数を大幅に増やす
                 points = []
-                step = max(1, len(contour) // 150)
+                step = max(1, len(contour) // 500)  # 300から500に増やしてより細かく
                 for i in range(0, len(contour), step):
                     points.append(contour[i][0].tolist())
                 
+                # スムージング処理を追加
+                smoothed_points = []
+                window_size = 5  # スムージングウィンドウサイズ
+                
+                for i in range(len(points)):
+                    # 周辺の点を取得（循環参照）
+                    window = []
+                    for j in range(-window_size//2, window_size//2 + 1):
+                        idx = (i + j) % len(points)
+                        window.append(points[idx])
+                    
+                    # 平均値で滑らかに
+                    avg_x = sum(p[0] for p in window) / len(window)
+                    avg_y = sum(p[1] for p in window) / len(window)
+                    smoothed_points.append([avg_x, avg_y])
+                
+                points = smoothed_points
+
                 # 閉じた形状にする
                 if points and points[0] != points[-1]:
                     points.append(points[0])
@@ -660,7 +685,7 @@ class ImageProcessingApp:
                 # 台座部分を識別するためのY値境界を計算
                 y_values = [p[1] for p in points]
                 min_y, max_y = min(y_values), max(y_values)
-                base_threshold = min_y + (max_y - min_y) * 0.95
+                base_threshold = min_y + (max_y - min_y) * 0.95  # 下部15%を台座領域に設定
                 
                 # 台座部分の点を識別
                 base_points_indices = []
@@ -670,6 +695,7 @@ class ImageProcessingApp:
                 
                 # 台座の左端と右端を特定
                 if base_points_indices:
+                    # ソートして連続領域を見つける
                     base_regions = []
                     current_region = [base_points_indices[0]]
                     
@@ -691,177 +717,85 @@ class ImageProcessingApp:
                             # 繋がっている場合は統合
                             base_regions[-1].extend(first_region)
                             base_regions.pop(0)
+                
+                # 点数が十分あるか確認
                 if len(points) >= 4:
                     # 開始点
                     path_data = f"M{points[0][0]},{points[0][1]}"
                     
-                    # 最初のセグメントの準備
-                    p0 = points[0]
-                    p1 = points[1]
-                    p2 = points[2]
-                    
-                    # 最初の制御点
-                    cp1_x = p0[0] + (p1[0] - p0[0]) / 3
-                    cp1_y = p0[1] + (p1[1] - p0[1]) / 3
-                    
-                    # 2番目の制御点
-                    cp2_x = p1[0] - (p2[0] - p0[0]) / 6
-                    cp2_y = p1[1] - (p2[1] - p0[1]) / 6
-                    
-                    # 台座部分かどうかを判定
-                    is_base_point = 1 in base_points_indices
-                    
-                    if is_base_point:
-                        # 台座部分は直線で
-                        path_data += f" C{cp1_x},{cp1_y} {cp2_x},{cp2_y} {p1[0]},{p1[1]}"
-                    else:
-                        # 通常部分は曲線で
-                        path_data += f" C{cp1_x},{cp1_y} {cp2_x},{cp2_y} {p1[0]},{p1[1]}"
-                    
-                    # 残りの点の処理
-                    prev_cp2_x, prev_cp2_y = cp2_x, cp2_y
-                    prev_x, prev_y = p1[0], p1[1]
-                    
-                    for i in range(2, len(points)):
-                        p = points[i]
+                    # ベジェ曲線の制御点の計算をさらに改善
+                    for i in range(1, len(points) - 2):
+                        p0 = points[i - 1]
+                        p1 = points[i]
+                        p2 = points[i + 1]
+                        p3 = points[i + 2]
+                        
+                        # テンション係数（0.25から0.2に減少してよりスムーズに）
+                        tension = 0.2
+                        
+                        # より滑らかな制御点の計算
+                        cp1_x = p1[0] + (p2[0] - p0[0]) * tension
+                        cp1_y = p1[1] + (p2[1] - p0[1]) * tension
+                        
+                        cp2_x = p2[0] - (p3[0] - p1[0]) * tension
+                        cp2_y = p2[1] - (p3[1] - p1[1]) * tension
+                        
+                        # 制御点の位置を微調整（中間点に寄せる）
+                        mid_x = (p1[0] + p2[0]) / 2
+                        mid_y = (p1[1] + p2[1]) / 2
+                        
+                        cp1_x = cp1_x * 0.8 + mid_x * 0.2
+                        cp1_y = cp1_y * 0.8 + mid_y * 0.2
+                        cp2_x = cp2_x * 0.8 + mid_x * 0.2
+                        cp2_y = cp2_y * 0.8 + mid_y * 0.2
                         
                         # 台座部分かどうかを判定
                         is_base_point = i in base_points_indices
                         
                         if is_base_point:
-                            # 台座部分は直線で処理
-                            path_data += f" L{p[0]},{p[1]}"
-                            # 直線部分の後も制御点情報を更新（次の曲線のため）
-                            prev_cp2_x = prev_x + (p[0] - prev_x) / 3
-                            prev_cp2_y = prev_y + (p[1] - prev_y) / 3
-                            prev_x, prev_y = p[0], p[1]
+                            # 台座部分は直線で
+                            path_data += f" L{p2[0]},{p2[1]}"
                         else:
-                            if i < len(points) - 1:
-                                reflect_x = 2 * prev_x - prev_cp2_x
-                                reflect_y = 2 * prev_y - prev_cp2_y
-                                
-                                # 次の点への方向
-                                next_idx = (i + 1) % len(points)
-                                next_p = points[next_idx]
-                                
-                                # 方向ベクトル
-                                dx = next_p[0] - p[0]
-                                dy = next_p[1] - p[1]
-                                
-                                # 第2制御点
-                                cp2_x = p[0] - dx / 3
-                                cp2_y = p[1] - dy / 3
-                                
-                                # Cコマンドで曲線を描画
-                                path_data += f" C{reflect_x},{reflect_y} {cp2_x},{cp2_y} {p[0]},{p[1]}"
-                                
-                                # 次のイテレーションのために保存
-                                prev_cp2_x, prev_cp2_y = cp2_x, cp2_y
-                                prev_x, prev_y = p[0], p[1]
-                            else:
-                                # 最後の点は閉じるように処理
-                                first_p = points[0]
-                                
-                                # 最後の点が台座部分なら直線で閉じる
-                                if 0 in base_points_indices:
-                                    path_data += f" L{first_p[0]},{first_p[1]}"
-                                else:
-                                    # 通常部分なら曲線で閉じる
-                                    reflect_x = 2 * prev_x - prev_cp2_x
-                                    reflect_y = 2 * prev_y - prev_cp2_y
-                                    
-                                    dx = first_p[0] - p[0]
-                                    dy = first_p[1] - p[1]
-                                    
-                                    cp2_x = p[0] + dx / 3
-                                    cp2_y = p[1] + dy / 3
-                                    
-                                    path_data += f" C{reflect_x},{reflect_y} {cp2_x},{cp2_y} {first_p[0]},{first_p[1]}"
+                            # 通常部分は滑らかな曲線で
+                            path_data += f" C{cp1_x},{cp1_y} {cp2_x},{cp2_y} {p2[0]},{p2[1]}"
+                    
+                    # 最後の点の処理も同様に改善
+                    if len(points) > 2:
+                        p0 = points[-3]
+                        p1 = points[-2]
+                        p2 = points[-1]
+                        
+                        tension = 0.2
+                        mid_x = (p1[0] + p2[0]) / 2
+                        mid_y = (p1[1] + p2[1]) / 2
+                        
+                        cp1_x = p1[0] + (p2[0] - p0[0]) * tension
+                        cp1_y = p1[1] + (p2[1] - p0[1]) * tension
+                        cp2_x = p2[0] - (p2[0] - p1[0]) * tension
+                        cp2_y = p2[1] - (p2[1] - p1[1]) * tension
+                        
+                        cp1_x = cp1_x * 0.8 + mid_x * 0.2
+                        cp1_y = cp1_y * 0.8 + mid_y * 0.2
+                        cp2_x = cp2_x * 0.8 + mid_x * 0.2
+                        cp2_y = cp2_y * 0.8 + mid_y * 0.2
+                        
+                        path_data += f" C{cp1_x},{cp1_y} {cp2_x},{cp2_y} {p2[0]},{p2[1]}"
                     
                     # 閉じる
                     path_data += "Z"
                     
-                    # パスを書き込み
-                    f.write(f'  <path d="{path_data}" stroke="#000000" stroke-width="1.2" fill="none" stroke-linejoin="round" stroke-linecap="round"/>\n')
+                    # パスを書き込み（線の結合方法も調整）
+                    f.write(f'  <path d="{path_data}" stroke="#000000" stroke-width="0.5" fill="none" stroke-linejoin="round" stroke-linecap="round" stroke-miterlimit="10"/>\n')
                 else:
                     # 点数が少ない場合
                     path_data = "M" + " L".join([f"{p[0]},{p[1]}" for p in points]) + "Z"
-                    f.write(f'  <path d="{path_data}" stroke="#000000" stroke-width="1.2" fill="none"/>\n')
+                    f.write(f'  <path d="{path_data}" stroke="#000000" stroke-width="0.5" fill="none"/>\n')
         
             f.write('</svg>')
         
         # 一時ファイル削除
         if os.path.exists(temp_png):
             os.remove(temp_png)
-        
-        # SVGファイルの確認
-        print("\nSVGファイルの確認結果:")
-        check_svg_path(file_path)
-
-        # 輪郭抽出のデバッグ
-        print("輪郭の数:", len(contours))
-        print("最大輪郭の面積:", cv2.contourArea(main_contour))
-        
-        # 点の間引きのデバッグ
-        print("元の点の数:", len(contour))
-        print("間引き後の点の数:", len(points))
-        
-        # パスデータのデバッグ
-        print("生成されたパスデータ:", path_data[:100] + "..." if len(path_data) > 100 else path_data)
-
-def verify_svg_path(svg_file_path):
-    try:
-        with open(svg_file_path, 'r') as f:
-            content = f.read()
-            
-        # path要素の存在確認
-        has_path = '<path' in content
-        
-        # path要素の属性確認
-        has_path_data = 'd="' in content
-        
-        # ベジェ曲線コマンドの確認
-        has_bezier = 'C' in content or 'c' in content
-        
-        return {
-            'has_path_element': has_path,
-            'has_path_data': has_path_data,
-            'has_bezier_curves': has_bezier
-        }
-    except Exception as e:
-        return {'error': str(e)}
-
-def check_svg_path(svg_file_path):
-    try:
-        with open(svg_file_path, 'r', encoding='utf-8') as f:
-            content = f.read()
-            
-        # 1. パス要素の存在確認
-        if '<path' not in content:
-            print("パス要素が存在しません")
-            return False
-            
-        # 2. パスデータの内容確認
-        path_data = content.split('d="')[1].split('"')[0]
-        print("パスデータ:", path_data[:100] + "..." if len(path_data) > 100 else path_data)
-        
-        # 3. ベジェ曲線コマンドの確認
-        if 'C' in path_data or 'c' in path_data:
-            print("ベジェ曲線が使用されています")
-        else:
-            print("ベジェ曲線が使用されていません")
-            
-        # 4. パスが閉じているか確認
-        if path_data.endswith('Z'):
-            print("パスは閉じられています")
-        else:
-            print("パスが閉じられていません")
-            
-        return True
-        
-    except Exception as e:
-        print(f"エラーが発生しました: {e}")
-        return False
 
 def main():
     root = TkinterDnD.Tk()
