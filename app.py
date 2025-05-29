@@ -343,7 +343,7 @@ class ImageProcessingApp:
             work_np = np.array(self.work_image)
             red_mask = np.zeros(work_np.shape[:2], dtype=np.uint8)
             blue_mask = np.zeros(work_np.shape[:2], dtype=np.uint8)
-            
+
             # 赤線の検出と処理
             red_condition = (
                 (work_np[:, :, 0] > 200) &
@@ -351,27 +351,25 @@ class ImageProcessingApp:
                 (work_np[:, :, 2] < 50)
             )
             red_mask[red_condition] = 255
-            
+
             # 赤線を元の画像で上書き
             orig_np = np.array(self.current_image.convert("RGBA"))
             work_np[red_condition] = orig_np[red_condition]
             self.work_image = Image.fromarray(work_np)
 
-            # キャンバス拡張
+            # 1) 拡張前の元サイズ
             current_w, current_h = self.work_image.size
-            new_h = current_h + 50
+
+            # 2) 台座の高さ ph を使ってキャンバスを拡張
+            new_h = current_h + ph
             new_canvas = Image.new('RGBA', (current_w, new_h), (0, 0, 0, 0))
             new_canvas.paste(self.work_image, (0, 0))
             self.work_image = new_canvas
 
-            # 拡張後の新しいマスクを作成
-            work_np = np.array(self.work_image)
-            new_red_mask = np.zeros(work_np.shape[:2], dtype=np.uint8)
-            new_blue_mask = np.zeros(work_np.shape[:2], dtype=np.uint8)
-            
-            # 元のred_maskを新しいマスクの対応する位置にコピー
+            # 3) マスクも同じサイズで初期化
+            new_red_mask = np.zeros((new_h, current_w), dtype=np.uint8)
             new_red_mask[:current_h, :] = red_mask
-            red_mask = new_red_mask  # red_maskを更新
+            red_mask = new_red_mask
 
             # 11. 青線を描画
             draw = ImageDraw.Draw(self.work_image)
@@ -383,21 +381,31 @@ class ImageProcessingApp:
             draw.line(vertical_left, fill=line_color, width=lw)
             draw.line(vertical_right, fill=line_color, width=lw)
 
-            # 台座画像（PIL Image）pedestal が既に用意できている前提
-            pw, ph = pedestal.size
+            # 補助線の最下部（青線の底辺）を取得
+            base_line_y = horizontal_guide_pedestal[0][1]  # 青線の底辺のY座標
+            left_x = horizontal_guide_pedestal[0][0]       # 青線の左端のX座標
+            right_x = horizontal_guide_pedestal[1][0]      # 青線の右端のX座標
 
-            # 青い矩形の下端Y座標を取得
-            base_top_y = horizontal_guide_pedestal[0][1]  # = y_feet
-
-            # 矩形の中央に寄せるためのXオフセットを計算
-            left_x, _ = horizontal_guide_pedestal[0]
-            right_x, _ = horizontal_guide_pedestal[1]
+            # 台座の配置位置を計算（青線の底辺に合わせる）
             rect_width = right_x - left_x
             offset_x = left_x + (rect_width - pw) // 2
-
-            # self.work_image は PIL Image (RGBA)
-            # pedestal のアルファをマスクにして貼り付け
+            base_top_y = base_line_y  # 青線の底辺に合わせる
             self.work_image.paste(pedestal, (offset_x, base_top_y), pedestal)
+
+            # 台座の緑線描画（1回だけ）
+            base_corners = [
+                (offset_x, base_top_y),
+                (offset_x + pw, base_top_y),
+                (offset_x + pw, base_top_y + ph),
+                (offset_x, base_top_y + ph)
+            ]
+
+            draw = ImageDraw.Draw(self.work_image)
+            green_color = (0, 255, 0, 255)
+            for i in range(len(base_corners)):
+                start = base_corners[i]
+                end = base_corners[(i + 1) % len(base_corners)] 
+                draw.line([start, end], fill=green_color, width=3)
 
             # 12. 青線のマスクを作成（拡張後のサイズで）
             work_np = np.array(self.work_image)
@@ -406,9 +414,8 @@ class ImageProcessingApp:
                 (work_np[:, :, 1] < 50) &
                 (work_np[:, :, 2] > 200)
             )
-            new_blue_mask = np.zeros_like(work_np[:, :, 0])
-            new_blue_mask[blue_condition] = 255
-            blue_mask = new_blue_mask  # blue_maskを更新
+            blue_mask = np.zeros_like(work_np[:, :, 0])
+            blue_mask[blue_condition] = 255
 
             # 13. 交差部分を検出
             intersection_mask = cv2.bitwise_and(red_mask, blue_mask)
@@ -444,7 +451,6 @@ class ImageProcessingApp:
                 P1 = intersection_points[0]
                 P2 = intersection_points[1]
             else:
-                # 万一2つ見つからなければ、無理やり処理するか中断するか
                 print("交差点が2つ見つからないので処理できません")
                 # return あるいは continue
 
@@ -493,7 +499,7 @@ class ImageProcessingApp:
                 for point in outer_contour.reshape(-1, 2):
                     px, py = point
                     # 範囲をさらに広げて探す
-                    if py < y0 and abs(px - x0) < 300:  # より広い範囲、y制約も緩和
+                    if py < y0 and abs(px - x0) < 300:
                         top_candidates.append((px, py, ((px-x0)**2 + (py-y0)**2)**0.5))
 
                 if top_candidates:
@@ -527,8 +533,7 @@ class ImageProcessingApp:
                         
                         # 距離が遠い場合は中間点を追加
                         dist = ((p1[0]-p2[0])**2 + (p1[1]-p2[1])**2)**0.5
-                        if dist > 15:  # 15px以上離れている場合
-                            # 中間点を追加
+                        if dist > 15:
                             mid_x = (p1[0] + p2[0]) // 2
                             mid_y = (p1[1] + p2[1]) // 2
                             full_connection_points.append((mid_x, mid_y))
@@ -537,33 +542,39 @@ class ImageProcessingApp:
                     for i in range(len(full_connection_points)-1):
                         p1 = full_connection_points[i]
                         p2 = full_connection_points[i+1]
-                        cv2.line(work_np, p1, p2, (0, 255, 0, 255), thickness=7)  # 太さを7に増加
+                        cv2.line(work_np, p1, p2, (0, 255, 0, 255), thickness=7) 
                     
                     # さらに接続点周辺を緑色で強化
                     for p in full_connection_points:
-                        cv2.circle(work_np, p, 3, (0, 255, 0, 255), -1)  # 接続点を緑で強調
+                        cv2.circle(work_np, p, 3, (0, 255, 0, 255), -1) 
                 else:
-                    # 候補点が見つからない場合は単純な直線
                     fixed_point = (x0, max(0, y0 - 100))
                     cv2.line(work_np, (x0, y0), fixed_point, (0, 255, 0, 255), thickness=7)
 
             # これで「交差点で外側が青線に切り替わり、最も外周だけを一周する輪郭線」を
             # 最終的に緑色で描画できます。
             self.work_image = Image.fromarray(work_np)
-            self.update_image_display(self.work_image)
 
-            # 台座配置のためにキャンバスを拡張
-            current_w, current_h = self.work_image.size
-            new_h = current_h + 50  # 余裕を持って50px追加
-            
-            # 新しい透明なキャンバスを作成
-            new_canvas = Image.new('RGBA', (current_w, new_h), (0, 0, 0, 0))
-            
-            # 元の画像を新しいキャンバスの上部に配置
-            new_canvas.paste(self.work_image, (0, 0))
-            
-            # 作業用画像を更新
-            self.work_image = new_canvas
+            # ⑯の処理の後に台座の緑線を再描画
+            draw = ImageDraw.Draw(self.work_image)
+            green_color = (0, 255, 0, 255)
+
+            # 台座の4点の座標を再計算
+            base_corners = [
+                (offset_x, base_top_y),
+                (offset_x + pw, base_top_y),
+                (offset_x + pw, base_top_y + ph),
+                (offset_x, base_top_y + ph),
+                (offset_x, base_top_y)  # 閉じる
+            ]
+
+            # 台座の緑線を描画
+            for i in range(len(base_corners) - 1):
+                start = base_corners[i]
+                end = base_corners[i + 1]
+                draw.line([start, end], fill=green_color, width=3)
+
+            self.update_image_display(self.work_image)
 
         except Exception as e:
             print("Error in combine_base:", e)
@@ -637,11 +648,8 @@ class ImageProcessingApp:
             for contour in contours:
                 if cv2.contourArea(contour) < 100:
                     continue
-                
-                # 元の輪郭点を適度に間引く
-                # 均等な間隔で点を選択（approxPolyDPは使わない）
                 points = []
-                step = max(1, len(contour) // 150)  # 約150点に抑える
+                step = max(1, len(contour) // 150)
                 for i in range(0, len(contour), step):
                     points.append(contour[i][0].tolist())
                 
@@ -652,7 +660,7 @@ class ImageProcessingApp:
                 # 台座部分を識別するためのY値境界を計算
                 y_values = [p[1] for p in points]
                 min_y, max_y = min(y_values), max(y_values)
-                base_threshold = min_y + (max_y - min_y) * 0.95  # 下部15%を台座領域に設定
+                base_threshold = min_y + (max_y - min_y) * 0.95
                 
                 # 台座部分の点を識別
                 base_points_indices = []
@@ -662,7 +670,6 @@ class ImageProcessingApp:
                 
                 # 台座の左端と右端を特定
                 if base_points_indices:
-                    # ソートして連続領域を見つける
                     base_regions = []
                     current_region = [base_points_indices[0]]
                     
@@ -684,8 +691,6 @@ class ImageProcessingApp:
                             # 繋がっている場合は統合
                             base_regions[-1].extend(first_region)
                             base_regions.pop(0)
-                
-                # 点数が十分あるか確認
                 if len(points) >= 4:
                     # 開始点
                     path_data = f"M{points[0][0]},{points[0][1]}"
@@ -731,9 +736,7 @@ class ImageProcessingApp:
                             prev_cp2_y = prev_y + (p[1] - prev_y) / 3
                             prev_x, prev_y = p[0], p[1]
                         else:
-                            # 通常部分はベジェ曲線で処理
                             if i < len(points) - 1:
-                                # 前の制御点の反射を計算
                                 reflect_x = 2 * prev_x - prev_cp2_x
                                 reflect_y = 2 * prev_y - prev_cp2_y
                                 
