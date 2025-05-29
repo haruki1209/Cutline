@@ -550,36 +550,69 @@ class ImageProcessingApp:
             self.work_image = Image.fromarray(work_np)
             self.update_image_display(self.work_image)
 
-            # 台座配置のためにキャンバスを拡張
+            # 台座の配置のためにキャンバスを拡張
             current_w, current_h = self.work_image.size
-            new_h = current_h + 50  # 余裕を持って50px追加
-            
-            # 新しい透明なキャンバスを作成
+            new_h = current_h + 50
             new_canvas = Image.new('RGBA', (current_w, new_h), (0, 0, 0, 0))
-            
-            # 元の画像を新しいキャンバスの上部に配置
             new_canvas.paste(self.work_image, (0, 0))
-            
-            # 作業用画像を更新
             self.work_image = new_canvas
 
-            # 台座部分の輪郭線を追加
-            base_contour = np.array([
-                [[offset_x, base_top_y]],  # 左上
-                [[offset_x + pw, base_top_y]],  # 右上
-                [[offset_x + pw, base_top_y + ph]],  # 右下
-                [[offset_x, base_top_y + ph]],  # 左下
-                [[offset_x, base_top_y]]  # 左上に戻る（閉じる）
-            ], dtype=np.int32)
+            # 台座の配置（1回だけ）
+            key = self.base_var.get()
+            sz = self.base_sizes.get(key, (200, 40))
+            pw, ph = sz
 
-            # 台座の輪郭線を緑色で描画
-            cv2.drawContours(work_np, [base_contour], -1, (0, 255, 0, 255), thickness=2)
+            if os.path.exists(self.base_parts[key]):
+                # 台座画像の読み込みと準備
+                base_img = cv2.imread(self.base_parts[key], cv2.IMREAD_UNCHANGED)
+                base_img = cv2.resize(base_img, sz)
+                base_img = cv2.cvtColor(base_img, cv2.COLOR_BGRA2RGBA)
+                base_pil = Image.fromarray(base_img)
+                
+                # 台座を画面中央に配置（1回だけ）
+                center_x = self.work_image.size[0] // 2
+                base_left_x = center_x - pw // 2
+                self.work_image.paste(base_pil, (base_left_x, base_top_y), base_pil)
 
-            # work_imageを更新
-            self.work_image = Image.fromarray(work_np)
-            
-            # 表示を更新
-            self.update_image_display(self.work_image)
+                # 台座の緑線を描画
+                work_np = np.array(self.work_image)
+                line_thickness = 3  # 11から7に変更（キャラクターの輪郭線と同じ太さ）
+
+                # まず外側の四角形を描画
+                outer_margin = line_thickness
+                outer_pts = np.array([
+                    [base_left_x - outer_margin, base_top_y - outer_margin],              # 左上
+                    [base_left_x + pw + outer_margin, base_top_y - outer_margin],         # 右上
+                    [base_left_x + pw + outer_margin, base_top_y + ph + outer_margin],    # 右下
+                    [base_left_x - outer_margin, base_top_y + ph + outer_margin]          # 左下
+                ], np.int32)
+                
+                # 閉じた緑の四角形を描画（外側）
+                cv2.fillPoly(work_np, [outer_pts], (0, 255, 0, 255))
+
+                # 内側のグレーの四角形を描画
+                inner_margin = line_thickness // 2
+                inner_pts = np.array([
+                    [base_left_x + inner_margin, base_top_y + inner_margin],              # 左上
+                    [base_left_x + pw - inner_margin, base_top_y + inner_margin],         # 右上
+                    [base_left_x + pw - inner_margin, base_top_y + ph - inner_margin],    # 右下
+                    [base_left_x + inner_margin, base_top_y + ph - inner_margin]          # 左下
+                ], np.int32)
+                
+                # グレーの塗りつぶし
+                cv2.fillPoly(work_np, [inner_pts], (128, 128, 128, 255))
+
+                # 更新された画像を保存
+                self.work_image = Image.fromarray(work_np)
+                self.update_image_display(self.work_image)
+
+                # 台座の位置情報を記録
+                self.base_position = {
+                    'x': base_left_x,
+                    'y': base_top_y,
+                    'width': pw,
+                    'height': ph
+                }
 
         except Exception as e:
             print("Error in combine_base:", e)
