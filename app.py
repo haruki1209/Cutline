@@ -7,6 +7,7 @@ import os
 from tkinterdnd2 import DND_FILES, TkinterDnD
 import traceback
 import base64
+import sys
 
 class ImageProcessingApp:
     def __init__(self, root):
@@ -27,13 +28,31 @@ class ImageProcessingApp:
         self.gap = 2  # 10から2に変更（2mm幅の輪郭線のため）
         self.thickness = 1  # 2から1に変更（より細かい制御のため）
 
+        # 実行ファイルのディレクトリを取得
+        if getattr(sys, 'frozen', False):
+            # exeファイルとして実行されている場合
+            self.application_path = sys._MEIPASS
+            print("Running as EXE. Path:", self.application_path)
+        else:
+            # 通常のPythonスクリプトとして実行されている場合
+            self.application_path = os.path.dirname(os.path.abspath(__file__))
+            print("Running as Script. Path:", self.application_path)
+
+        # assets ディレクトリの存在確認
+        assets_dir = os.path.join(self.application_path, "assets")
+        if not os.path.exists(assets_dir):
+            print(f"Warning: Assets directory not found at {assets_dir}")
+        else:
+            print(f"Assets directory found at {assets_dir}")
+            print("Contents:", os.listdir(assets_dir))
+
         # 台座関連の設定
         self.base_var = tk.StringVar(value="16mm")
         self.base_parts = {
-            "16mm": "nichidai_base_16mm.png",
-            "14mm": "nichidai_base_14mm.png",
-            "12mm": "nichidai_base_12mm.png",
-            "10mm": "nichidai_base_10mm.png"
+            "16mm": os.path.join(self.application_path, "assets", "nichidai_base_16mm.png"),
+            "14mm": os.path.join(self.application_path, "assets", "nichidai_base_14mm.png"),
+            "12mm": os.path.join(self.application_path, "assets", "nichidai_base_12mm.png"),
+            "10mm": os.path.join(self.application_path, "assets", "nichidai_base_10mm.png")
         }
         self.base_sizes = {
             "16mm": (200, 40),
@@ -256,6 +275,15 @@ class ImageProcessingApp:
 
     def combine_base(self):
         try:
+            # デバッグ用のパス情報出力
+            print("Application Path:", self.application_path)
+            print("Assets directory contents:", os.listdir(os.path.join(self.application_path, "assets")))
+            
+            key = self.base_var.get()
+            base_path = self.base_parts.get(key, "")
+            print("Trying to load:", base_path)
+            print("File exists:", os.path.exists(base_path))
+
             # 1. work_imageから処理を開始
             work_np = np.array(self.work_image)
             
@@ -283,7 +311,6 @@ class ImageProcessingApp:
             y_feet = y_max
 
             # 6. 台座準備
-            key = self.base_var.get()
             fn = self.base_parts.get(key, "")
             sz = self.base_sizes.get(key, (200, 40))
             if os.path.exists(fn):
@@ -633,27 +660,23 @@ class ImageProcessingApp:
         # 輪郭抽出用の画像
         img_np = np.array(self.work_image)
         
-        # 緑色の輪郭線を抽出
+        # 緑色の輪郭線を抽出（膨張処理なしで）
         green_mask = np.zeros(img_np.shape[:2], dtype=np.uint8)
-        green_pixels = (img_np[:,:,0]<50) & (img_np[:,:,1]>200) & (img_np[:,:,2]<50) & (img_np[:,:,3]>50)
+        green_pixels = (
+            (img_np[:,:,0]<50) & 
+            (img_np[:,:,1]>200) & 
+            (img_np[:,:,2]<50) & 
+            (img_np[:,:,3]>50)
+        )
         green_mask[green_pixels] = 255
-        
-        # 前処理を強化
-        # ギャップを埋めるために膨張処理
-        dilate_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))  # 7から9に増加
-        green_mask = cv2.dilate(green_mask, dilate_kernel, iterations=1)
-        
-        # ブラー処理を強化
-        green_mask = cv2.GaussianBlur(green_mask, (15, 15), 2)  # カーネルサイズとシグマ値を調整
-        _, green_mask = cv2.threshold(green_mask, 127, 255, cv2.THRESH_BINARY)
-        
-        # モルフォロジー処理で形状を整える
-        close_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))  # 11から15に増加
-        green_mask = cv2.morphologyEx(green_mask, cv2.MORPH_CLOSE, close_kernel)
-        
-        # 輪郭抽出 - 間引かないで全ての点を取得
-        contours, _ = cv2.findContours(green_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
-        
+
+        # 輪郭を直接抽出（追加の処理なし）
+        contours, _ = cv2.findContours(
+            green_mask, 
+            cv2.RETR_EXTERNAL, 
+            cv2.CHAIN_APPROX_NONE  # より詳細な輪郭点を取得
+        )
+
         # 最大の輪郭だけを選択
         if contours:
             main_contour = max(contours, key=cv2.contourArea)
